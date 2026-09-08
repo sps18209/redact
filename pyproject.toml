@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redact-suite"
+version = "0.1.0"
+description = "A unified redaction suite that ingests any document and routes it to the best available PII/PHI redaction backend."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "redact-suite contributors" }]
+keywords = ["pii", "phi", "redaction", "anonymization", "presidio", "privacy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+# The suite runs with zero third-party dependencies (the built-in regex backend
+# and stdlib-only HTTP adapters). Heavy tools are opt-in "extras" so a user only
+# installs the backend they intend to use.
+dependencies = []
+
+[project.optional-dependencies]
+presidio = ["presidio-analyzer", "presidio-anonymizer"]
+pdf = ["pypdf>=3.0"]
+anonymizer = ["anonymizer"]
+dev = ["pytest>=7"]
+# convenience meta-extra
+all = ["presidio-analyzer", "presidio-anonymizer", "pypdf>=3.0"]
+
+[project.scripts]
+redact = "redact.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/sps18209/redact"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

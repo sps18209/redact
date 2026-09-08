@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Redaction artifacts (never commit potentially sensitive outputs)
+*.redacted.*
+*-final.pdf
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
