@@ -10,14 +10,14 @@ the suite works out of the box and every heavy tool is opt-in.
 │  inputs  │ ────────────▶ │ router │ ──────────────▶ │  backend (the right tool)    │
 │ files /  │  detect type  │ picks  │  by media type  │  presidio · philter ·        │
 │ dirs /   │               │ a tool │  + availability │  redactai · pdf-redact-tools │
-│ globs    │               └────────┘  + priority     │  · anonymizer · builtin      │
+│ globs    │               └────────┘  + priority     │  · deface · builtin          │
 └──────────┘                                          └──────────────────────────────┘
 ```
 
 ## Why
 
-The redaction ecosystem is fragmented: Presidio is great for text, Anonymizer
-handles faces and license plates, pdf-redact-tools sanitises PDFs, and so on.
+The redaction ecosystem is fragmented: Presidio is great for text, deface blurs
+faces in video, pdf-redact-tools sanitises PDFs, and so on.
 `redact-suite` is the layer on top: one ingestion path, one selection policy,
 one result shape — so you can throw a mixed folder at it and let it dispatch
 each document to the tool that fits.
@@ -120,13 +120,15 @@ Embedded images are governed by `--docx-images`:
 ```bash
 redact run memo.docx --docx-images keep    # default: leave them, report the count
 redact run memo.docx --docx-images strip   # replace each with a blank PNG
-redact run memo.docx --docx-images blur    # blur faces/plates via an image backend
+redact run memo.docx --docx-images blur    # blur faces via an image backend
 ```
 
 `strip` renames parts to `.png` and rewrites the referencing relationships and
 content types, so the document stays valid. `blur` routes each image through the
-best available image backend (Anonymizer); any image it declines is stripped
-instead, so the policy never silently leaves data behind.
+highest-priority available image backend (`deface`, if installed); any image it
+declines or fails on is stripped instead, so the policy never silently leaves
+data behind — and the result message reports the real split, e.g.
+`1 embedded image(s) blurred, 1 stripped (could not be processed)`.
 
 Stdlib only — no `python-docx` needed. Both the builtin engine and Presidio can
 drive Word redaction; with Presidio installed it wins on priority and you get
