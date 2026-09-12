@@ -8,6 +8,7 @@ its type.
 
 from __future__ import annotations
 
+import glob as _glob
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, List
@@ -50,6 +51,24 @@ _MAGIC = [
     (b"BM", MediaType.IMAGE),                     # BMP
     (b"RIFF", MediaType.IMAGE),                   # WEBP/AVI share RIFF; refined below
 ]
+
+# Directories that never hold user documents; skipped when walking a tree
+# (hidden directories such as ``.git`` are skipped as well).
+_SKIP_DIRS = {"node_modules", "__pycache__", "venv"}
+
+
+def is_redaction_output(path: Path) -> bool:
+    """True for artifacts the suite itself produces.
+
+    Ingestion skips these so a second run over the same folder never re-redacts
+    ``a.redacted.txt`` into ``a.redacted.redacted.txt``.
+    """
+    name = path.name
+    return (
+        ".redacted." in name
+        or name.endswith(".redacted")
+        or name.endswith("-final.pdf")  # pdf-redact-tools output
+    )
 
 
 @dataclass
@@ -145,10 +164,13 @@ def iter_documents(
     a folder and it surfaces every redactable file it can identify.
 
     Files whose type resolves to :data:`MediaType.UNKNOWN` are skipped unless
-    ``include_unknown`` is set.
+    ``include_unknown`` is set. The suite's own outputs (see
+    :func:`is_redaction_output`) are always skipped.
     """
     for raw in inputs:
         for path in _expand_input(raw, recursive):
+            if is_redaction_output(path):
+                continue
             mt = detect_media_type(path)
             if mt is MediaType.UNKNOWN and not include_unknown:
                 continue
@@ -159,9 +181,18 @@ def _expand_input(raw: str, recursive: bool) -> List[Path]:
     p = Path(raw)
     if p.is_dir():
         globber = p.rglob("*") if recursive else p.glob("*")
-        return sorted(f for f in globber if f.is_file())
+        return sorted(f for f in globber if f.is_file() and not _in_skipped_dir(f, p))
     if p.is_file():
         return [p]
-    # Treat as a glob pattern relative to cwd.
-    matches = sorted(Path().glob(raw))
+    # Treat as a glob pattern. ``glob.glob`` handles absolute patterns, which
+    # ``Path().glob`` rejects, and ``**`` when recursive.
+    matches = sorted(Path(m) for m in _glob.glob(raw, recursive=recursive))
     return [m for m in matches if m.is_file()]
+
+
+def _in_skipped_dir(path: Path, root: Path) -> bool:
+    """True if any directory between ``root`` and ``path`` is hidden or junk."""
+    for part in path.relative_to(root).parts[:-1]:
+        if part.startswith(".") or part in _SKIP_DIRS:
+            return True
+    return False

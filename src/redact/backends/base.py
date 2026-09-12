@@ -9,10 +9,16 @@ their dependencies are present, and they translate the suite's neutral
 from __future__ import annotations
 
 import abc
+import time
 from typing import List, Sequence
 
 from ..document import Document
 from ..types import MediaType, RedactionOptions, RedactionResult
+
+#: How long a backend's availability answer is trusted before re-probing.
+#: Some adapters probe a network service, so re-checking on every document in a
+#: batch would be needlessly slow.
+AVAILABILITY_TTL_SECONDS = 60.0
 
 
 class Backend(abc.ABC):
@@ -43,11 +49,27 @@ class Backend(abc.ABC):
         """
 
     def is_available(self) -> bool:
-        """True when the backend can actually run right now."""
+        """True when the backend can actually run right now.
+
+        The answer is memoised for :data:`AVAILABILITY_TTL_SECONDS` so a batch
+        run does not re-probe services for every document. Call
+        :meth:`refresh_availability` to force a fresh check.
+        """
+        cached = getattr(self, "_availability", None)
+        now = time.monotonic()
+        if cached is not None and now - cached[1] < AVAILABILITY_TTL_SECONDS:
+            return cached[0]
         try:
-            return not self.missing_dependencies()
+            ok = not self.missing_dependencies()
         except Exception:  # defensive: discovery must never crash the suite
-            return False
+            ok = False
+        self._availability = (ok, now)
+        return ok
+
+    def refresh_availability(self) -> bool:
+        """Drop the cached availability answer and re-probe."""
+        self._availability = None
+        return self.is_available()
 
     @abc.abstractmethod
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:

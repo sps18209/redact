@@ -27,7 +27,8 @@ dependencies = []
 [project.optional-dependencies]
 presidio = ["presidio-analyzer", "presidio-anonymizer"]
 pdf = ["pypdf>=3.0"]
-anonymizer = ["anonymizer"]
+# NOTE: understand-ai's Anonymizer is a git checkout, not a PyPI package (the
+# PyPI "anonymizer" project is unrelated) — see backends/anonymizer.py.
 dev = ["pytest>=7"]
 # convenience meta-extra
 all = ["presidio-analyzer", "presidio-anonymizer", "pypdf>=3.0"]

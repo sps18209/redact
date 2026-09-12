@@ -46,7 +46,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/router.py` | `select_backend` / `candidates` — the selection policy. |
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
 | `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run`. |
-| `tests/` | pytest suite (37 tests) — ingestion, detection, routing, builtin, CLI, discovery. |
+| `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
+| `.github/workflows/ci.yml` | CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
 
 ## Backends
 
@@ -56,7 +57,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `presidio` | text, structured | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
-| `anonymizer` | image, video | 60 | `anonymizer` package or CLI |
+| `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`); `ffmpeg`+`ffprobe` for video. **Not** the PyPI `anonymizer` package — that's unrelated. |
 | `pdf-redact-tools` | pdf | 40 | `pdf-redact-tools` on PATH |
 
 Priority orders auto-selection: purpose-built tools outrank the builtin fallback.
@@ -75,6 +76,7 @@ redact run ./inbox -o ./clean         # batch a folder
 redact run notes.txt -b presidio      # force a backend
 redact run data.csv -m mask           # mask instead of <TYPE> placeholder
 redact run notes.txt --dry-run        # detect only, write nothing
+redact run notes.txt -e EMAIL_ADDRESS,US_SSN   # restrict entity types (comma or repeat -e)
 python -m redact list                 # module entry point equivalent
 ```
 
@@ -93,6 +95,15 @@ python -m redact list                 # module entry point equivalent
   `builtin.apply_redactions`. Reuse it rather than re-implementing per backend.
 - Keep the CLI's three verbs (`list`/`detect`/`run`) thin — logic belongs in the
   suite/router/backends, not `cli.py`.
+- **Ingestion never re-reads the suite's own outputs** (`document.is_redaction_output`)
+  and skips hidden/junk dirs, so a batch is idempotent. Any new backend that
+  writes artifacts must name them `<stem>.redacted<suffix>` (or extend that
+  predicate) or a second run will re-redact them.
+- `Backend.is_available()` is memoised for 60s (some adapters probe a network
+  service). Use `refresh_availability()` if a test or caller changes the
+  environment mid-process.
+- Output files always go to `<stem>.redacted<suffix>` — never `.with_suffix()`
+  on an already-suffixed name (that's how `.redacted.redacted` happened).
 
 ## Adding a new backend
 

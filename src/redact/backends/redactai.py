@@ -21,12 +21,13 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import List
 
 from ..document import Document
 from ..types import Entity, MediaType, RedactionOptions, RedactionResult
 from .base import Backend
-from .builtin import apply_redactions, default_output_path, detect_entities
+from .builtin import apply_redactions, detect_entities
 
 _DEFAULT_OLLAMA = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3"
@@ -140,7 +141,7 @@ class RedactAIBackend(Backend):
         # Write a redacted text sidecar. A true PDF black-out requires a PDF
         # writer with span coordinates; we emit .redacted.txt to stay honest
         # about what was applied.
-        out = default_output_path(document.path, options).with_suffix(".redacted.txt")
+        out = _sidecar_path(document.path, options)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(redacted, encoding="utf-8")
@@ -151,6 +152,12 @@ class RedactAIBackend(Backend):
         result.output_path = out
         result.message = "text redacted (PDF text layer); see .redacted.txt"
         return result
+
+
+def _sidecar_path(source: Path, options: RedactionOptions) -> Path:
+    """``report.pdf`` -> ``report.redacted.txt`` (never ``.redacted.redacted``)."""
+    out_dir = Path(options.output_dir) if options.output_dir else source.parent
+    return out_dir / (source.stem + ".redacted.txt")
 
 
 def _entities_from_model_output(raw: str, text: str) -> List[Entity]:

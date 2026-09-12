@@ -11,7 +11,7 @@ the suite works out of the box and every heavy tool is opt-in.
 │ files /  │  detect type  │ picks  │  by media type  │  presidio · philter ·        │
 │ dirs /   │               │ a tool │  + availability │  redactai · pdf-redact-tools │
 │ globs    │               └────────┘  + priority     │  · anonymizer · builtin      │
-└──────────┘                                           └──────────────────────────────┘
+└──────────┘                                          └──────────────────────────────┘
 ```
 
 ## Why
@@ -31,7 +31,7 @@ each document to the tool that fits.
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
-| **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — blurs faces & license plates. | `pip install "redact-suite[anonymizer]"` or its CLI |
+| **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — blurs faces & license plates. Video via ffmpeg frame extraction. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`); `ffmpeg` for video |
 
 Backends report their own availability, so `redact list` always tells you what
 can run right now and exactly what each missing one needs.
@@ -44,6 +44,14 @@ pip install -e ".[presidio]"     # add Presidio
 pip install -e ".[all]"          # add every pip-installable backend
 ```
 
+Anonymizer is not on PyPI (the PyPI `anonymizer` project is unrelated):
+
+```bash
+git clone https://github.com/understand-ai/anonymizer
+pip install -r anonymizer/requirements.txt
+export ANONYMIZER_HOME=$PWD/anonymizer   # weights auto-download on first run
+```
+
 ## CLI
 
 ```bash
@@ -54,8 +62,11 @@ redact run ./inbox -o ./clean        # ingest a whole folder, write to ./clean
 redact run notes.txt -b presidio     # force a specific backend
 redact run data.csv -m mask          # mask instead of the default <TYPE> placeholder
 redact run notes.txt --dry-run       # detect & report, write nothing
-redact run notes.txt -e EMAIL_ADDRESS US_SSN   # only these entity types
+redact run notes.txt -e EMAIL_ADDRESS,US_SSN   # only these entity types (or repeat -e)
 ```
+
+Re-running over the same folder is safe: the suite never re-ingests its own
+`*.redacted.*` outputs, and it skips hidden directories such as `.git`.
 
 ### `run` options
 
@@ -63,7 +74,7 @@ redact run notes.txt -e EMAIL_ADDRESS US_SSN   # only these entity types
 |---|---|
 | `-b, --backend` | backend name, or `auto` (default) to let the suite choose |
 | `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` |
-| `-e, --entities` | restrict detection to these labels |
+| `-e, --entities` | restrict detection to these labels (comma-separated or repeated) |
 | `-o, --out` | output directory (default: alongside each source) |
 | `--threshold` | minimum confidence to act on a detection (default `0.35`) |
 | `--dry-run` | detect and report only |

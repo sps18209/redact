@@ -35,11 +35,15 @@ _PHONE = re.compile(
     r"(?<!\d)(?:\+?\d{1,2}[\s.\-]?)?(?:\(\d{3}\)|\d{3})[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"
 )
 _SSN = re.compile(r"\b(?!000|666|9\d\d)\d{3}[-\s]?(?!00)\d{2}[-\s]?(?!0000)\d{4}\b")
-_CREDIT_CARD = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+# Starts and ends on a digit so a trailing separator is never swallowed.
+_CREDIT_CARD = re.compile(r"\b\d(?:[ -]?\d){12,18}\b")
 _IPV4 = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
 )
-_IPV6 = re.compile(r"\b(?:[A-Fa-f0-9]{1,4}:){2,7}[A-Fa-f0-9]{1,4}\b")
+# At least four colon-separated groups: two-colon forms like ``10:23:45`` are
+# almost always clock times, which flooded log files with false positives.
+# (Compressed ``::`` notation is not handled; use Presidio for full IPv6.)
+_IPV6 = re.compile(r"\b(?:[A-Fa-f0-9]{1,4}:){3,7}[A-Fa-f0-9]{1,4}\b")
 _URL = re.compile(r"\bhttps?://[^\s<>\"')]+", re.IGNORECASE)
 _IBAN = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _US_ZIP = re.compile(r"\b\d{5}(?:-\d{4})?\b")

@@ -54,8 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="how to transform detected entities (default: replace)",
     )
     p_run.add_argument(
-        "-e", "--entities", nargs="*", default=None,
-        help="restrict detection to these entity labels (default: all)",
+        "-e", "--entities", action="append", default=None, metavar="LABEL[,LABEL]",
+        help="restrict detection to these entity labels; repeat the flag or "
+        "comma-separate, e.g. -e EMAIL_ADDRESS,US_SSN (default: all)",
     )
     p_run.add_argument("-o", "--out", default=None, help="output directory")
     p_run.add_argument("--lang", default="en", help="language code (default: en)")
@@ -101,11 +102,24 @@ def _cmd_detect(inputs: List[str], recursive: bool, include_unknown: bool) -> in
     return 0
 
 
+def _parse_entities(raw: Optional[List[str]]) -> Optional[List[str]]:
+    """Flatten repeated/comma-separated ``-e`` values; empty means "all"."""
+    if not raw:
+        return None
+    labels = [
+        label.strip().upper()
+        for chunk in raw
+        for label in chunk.split(",")
+        if label.strip()
+    ]
+    return labels or None
+
+
 def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
     options = RedactionOptions(
         backend=args.backend,
         mode=RedactionMode(args.mode),
-        entities=args.entities,
+        entities=_parse_entities(args.entities),
         language=args.lang,
         threshold=args.threshold,
         mask_char=args.mask_char,
