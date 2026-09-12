@@ -27,7 +27,7 @@ each document to the tool that fits.
 | Backend | Handles | What it does | Requires |
 |---|---|---|---|
 | **builtin** | text, structured, docx | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Word documents in place, formatting intact. Always available. | nothing (stdlib) |
-| **presidio** | text, structured | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
+| **presidio** | text, structured, docx | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
@@ -76,14 +76,44 @@ directory: `redact run inbox -o clean` turns `inbox/hr/x.txt` into
 ### Word documents
 
 `.docx` files are redacted **in place as Word documents** — you get a `.docx`
-back with formatting, images and layout intact, not a text dump. Word often
-splits one word across several runs (after spell-check or formatting), so
-detection runs on each paragraph's full text and the placeholder is written into
-the run where the match started. Body, headers, footers, footnotes, endnotes and
-comments are all processed, and the author fields in the document properties are
-scrubbed (reported as `DOCUMENT_AUTHOR`; pass `-e` to opt out). Text inside
-tracked deletions, field codes and embedded images is not touched. Stdlib only —
-no `python-docx` needed.
+back with formatting and layout intact, not a text dump. Word often splits one
+word across several runs (after spell-check or formatting), so detection runs on
+each paragraph's full text and the placeholder is written into the run where the
+match started.
+
+Crucially, redaction covers content that is **invisible on screen but still
+shipped in the file** — the usual way a "redacted" document leaks:
+
+| Hiding place | What lives there |
+|---|---|
+| Tracked deletions (`w:delText`) | text someone deleted with Track Changes on; survives *reject all changes* |
+| Field codes (`w:instrText`, `w:fldSimple`) | e.g. `HYPERLINK "mailto:jane@example.com"` |
+| Revision & comment authors | `w:author` / `w:initials` on every edit and comment |
+| Document properties | `dc:creator`, `cp:lastModifiedBy`, `Manager` |
+| Relationship targets | a `mailto:` address lives in `.rels`, not the body |
+| Embedded images | see `--docx-images` below |
+
+Body, headers, footers, footnotes, endnotes and comments are all processed.
+Author names are reported as `DOCUMENT_AUTHOR` (pass `-e` to opt out). Findings
+in non-visible content are reported without offsets, since they have no position
+in the rendered page.
+
+Embedded images are governed by `--docx-images`:
+
+```bash
+redact run memo.docx --docx-images keep    # default: leave them, report the count
+redact run memo.docx --docx-images strip   # replace each with a blank PNG
+redact run memo.docx --docx-images blur    # blur faces/plates via an image backend
+```
+
+`strip` renames parts to `.png` and rewrites the referencing relationships and
+content types, so the document stays valid. `blur` routes each image through the
+best available image backend (Anonymizer); any image it declines is stripped
+instead, so the policy never silently leaves data behind.
+
+Stdlib only — no `python-docx` needed. Both the builtin engine and Presidio can
+drive Word redaction; with Presidio installed it wins on priority and you get
+name/location detection inside `.docx` too.
 
 ### `run` options
 
@@ -95,6 +125,7 @@ no `python-docx` needed.
 | `-o, --out` | output directory (default: alongside each source). The source tree is mirrored beneath it, so `inbox/a/x.txt` and `inbox/b/x.txt` never collide. |
 | `--threshold` | minimum confidence to act on a detection (default `0.35`) |
 | `--dry-run` | detect and report only |
+| `--docx-images` | embedded images in a `.docx`: `keep` (default), `strip`, `blur` |
 | `--no-recursive` | do not walk directories recursively |
 
 ## Library

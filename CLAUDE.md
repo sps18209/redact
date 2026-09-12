@@ -35,7 +35,7 @@ CLI, and every adapter are decoupled from any specific tool.
 |---|---|
 | `src/redact/types.py` | Core dataclasses/enums: `MediaType`, `RedactionMode`, `Entity`, `RedactionOptions`, `RedactionResult`. Dependency-free — the shared vocabulary. |
 | `src/redact/document.py` | Ingestion: `MediaType` detection, `load_document`, `iter_documents` (files/dirs/globs), and **`output_path`** — the one rule for where artifacts go. |
-| `src/redact/docx.py` | Stdlib `.docx` support: paragraph-level detection mapped back onto `<w:t>` runs, all text parts + core-properties authors, Word-safe XML round-trip. |
+| `src/redact/docx.py` | Stdlib `.docx` support: paragraph-level detection mapped back onto `<w:t>` runs; also tracked deletions, field codes, revision/comment authors, docProps, `.rels` hyperlink targets and embedded images. Word-safe XML round-trip. |
 | `src/redact/backends/base.py` | `Backend` ABC — the adapter contract. |
 | `src/redact/backends/builtin.py` | Offline regex/rule engine. Also exports reusable `detect_entities` / `apply_redactions`. Always available. |
 | `src/redact/backends/presidio.py` | Microsoft Presidio (text/structured), optional import. |
@@ -55,7 +55,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | Name | Media types | Priority | Requires |
 |---|---|---|---|
 | `builtin` | text, structured, docx | 10 | nothing (stdlib) |
-| `presidio` | text, structured | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
+| `presidio` | text, structured, docx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
 | `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`); `ffmpeg`+`ffprobe` for video. **Not** the PyPI `anonymizer` package — that's unrelated. |
@@ -112,10 +112,20 @@ python -m redact list                 # module entry point equivalent
 - `Document.root` is set by `iter_documents` (the directory walked, or a glob's
   wildcard-free prefix) and is `None` for a directly loaded file. Preserve it
   when constructing documents in new code paths.
-- **`.docx` goes through `docx.redact_docx`** with `detect`/`replace` callbacks
-  so any text engine can drive it; today only the builtin backend does. When
-  editing `docx.py`, keep the root-tag preservation — ElementTree drops unused
-  namespace declarations and Word then rejects the file (`mc:Ignorable`).
+- **`.docx` goes through `docx.redact_docx`** with `detect`/`replace` callbacks,
+  driven by `builtin.redact_docx_document` — the shared entry point both the
+  builtin engine and Presidio use. A new text backend gets Word support by
+  calling it with its own `detect`; never reimplement the orchestration.
+- **`docx.py` serialization is fragile by nature.** Keep the root-tag
+  preservation *and* the default-namespace registration in `_parse`: ElementTree
+  drops unused `xmlns:` declarations (Word then rejects the file over
+  `mc:Ignorable`) and mangles default namespaces into `ns0:` (which produces
+  mismatched tags in `.rels` and `[Content_Types].xml`). Both are regression-tested.
+- **Hidden text is in scope.** Tracked deletions, field codes, authors, `.rels`
+  targets and images are redacted, not just visible runs — that is the whole
+  point of document redaction. Findings outside the visible flow are reported
+  with `start`/`end` of `None`; visible offsets index the *source* text, so
+  `extract_text(doc)[e.start:e.end] == e.text` holds.
 
 ## Adding a new backend
 
@@ -127,8 +137,13 @@ python -m redact list                 # module entry point equivalent
 
 ## Notes for future sessions
 
-- Presidio does not yet handle `.docx`; wiring it up means passing its analyzer
-  as `detect` and a per-entity anonymize as `replace` into `docx.redact_docx`.
+- Presidio drives `.docx` for *detection*; the rewrite uses the suite's own
+  `replacement_for`, because run-level editing needs a string per entity rather
+  than one anonymized blob. Modes therefore behave identically across backends.
+- Presidio is not installed in CI. `tests/test_presidio_docx.py` injects fake
+  `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
+  real adapter code is exercised; the fake detects `PERSON`, a label the builtin
+  engine cannot produce, which is how those tests prove Presidio drove the run.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

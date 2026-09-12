@@ -82,6 +82,8 @@ class RedactionOptions:
     mask_char: str = "*"
     output_dir: Optional[Path] = None  # where redacted artifacts are written
     dry_run: bool = False  # detect + report, but do not write redacted output
+    #: What to do with images embedded in a .docx: keep | strip | blur.
+    docx_images: str = "keep"
     extra: dict = field(default_factory=dict)  # backend-specific escape hatch
 
 

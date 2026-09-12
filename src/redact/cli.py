@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument("--mask-char", default="*", help="character used in mask mode")
     p_run.add_argument(
+        "--docx-images", default="keep", choices=["keep", "strip", "blur"],
+        help="images embedded in a .docx: keep them (default), strip them to a "
+        "blank placeholder, or blur faces/plates with an image backend",
+    )
+    p_run.add_argument(
         "--dry-run", action="store_true",
         help="detect and report, but write nothing",
     )
@@ -123,6 +128,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         language=args.lang,
         threshold=args.threshold,
         mask_char=args.mask_char,
+        docx_images=args.docx_images,
         output_dir=Path(args.out) if args.out else None,
         dry_run=args.dry_run,
     )

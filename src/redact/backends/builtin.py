@@ -145,7 +145,7 @@ def _dedupe_overlaps(entities: List[Entity]) -> List[Entity]:
     return kept
 
 
-def _replacement(entity: Entity, options: RedactionOptions) -> str:
+def replacement_for(entity: Entity, options: RedactionOptions) -> str:
     original = entity.text or ""
     if options.mode is RedactionMode.MASK:
         return options.mask_char * max(len(original), 1)
@@ -169,7 +169,7 @@ def apply_redactions(
     for entity in sorted(entities, key=lambda e: e.start or 0, reverse=True):
         if entity.start is None or entity.end is None:
             continue
-        result = result[: entity.start] + _replacement(entity, options) + result[entity.end :]
+        result = result[: entity.start] + replacement_for(entity, options) + result[entity.end :]
     return result
 
 
@@ -226,31 +226,57 @@ class BuiltinBackend(Backend):
         return result
 
     def _redact_docx(self, document: Document, options: RedactionOptions) -> RedactionResult:
-        """Word documents: paragraph-level detection mapped back onto runs."""
-        from ..docx import AUTHOR_ENTITY, DocxError, redact_docx  # stdlib only, but keep discovery lean
-
-        result = RedactionResult(
-            source=document.path, backend=self.name, media_type=document.media_type,
+        return redact_docx_document(
+            self.name,
+            document,
+            options,
+            detect=lambda text: detect_entities(text, options.entities, options.threshold),
         )
-        wanted = options.entities
-        out = None if options.dry_run else output_path(document, options)
-        try:
-            docx = redact_docx(
-                document.path,
-                out,
-                detect=lambda text: detect_entities(text, wanted, options.threshold),
-                replace=lambda entity: _replacement(entity, options),
-                scrub_authors=(wanted is None or AUTHOR_ENTITY in wanted),
-            )
-        except (DocxError, OSError) as exc:
-            result.success = False
-            result.message = f"could not redact .docx: {exc}"
-            return result
 
-        result.entities = docx.entities
-        result.redacted_text = docx.redacted_text
-        if options.dry_run:
-            result.message = "dry-run: detected only, nothing written"
-        else:
-            result.output_path = out
+
+def redact_docx_document(
+    backend_name: str,
+    document: Document,
+    options: RedactionOptions,
+    detect,
+) -> RedactionResult:
+    """Drive a Word redaction with any detection function.
+
+    Shared by every text backend that supports ``.docx`` (the builtin engine and
+    Presidio): the backend supplies ``detect``; replacement, image policy, output
+    naming and error handling are identical for all of them.
+    """
+    from ..docx import AUTHOR_ENTITY, IMAGE_ENTITY, DocxError, redact_docx
+
+    result = RedactionResult(
+        source=document.path, backend=backend_name, media_type=document.media_type,
+    )
+    wanted = options.entities
+    out = None if options.dry_run else output_path(document, options)
+    policy = options.docx_images
+    if wanted is not None and IMAGE_ENTITY not in wanted:
+        policy = "keep"  # an entity filter that excludes images means leave them
+    try:
+        docx = redact_docx(
+            document.path,
+            out,
+            detect=detect,
+            replace=lambda entity: replacement_for(entity, options),
+            scrub_authors=(wanted is None or AUTHOR_ENTITY in wanted),
+            image_policy=policy,
+            image_redactor=options.extra.get("image_redactor"),
+        )
+    except (DocxError, OSError, ValueError) as exc:
+        result.success = False
+        result.message = f"could not redact .docx: {exc}"
         return result
+
+    result.entities = docx.entities
+    result.redacted_text = docx.redacted_text
+    notes = list(docx.notes)
+    if options.dry_run:
+        notes.insert(0, "dry-run: detected only, nothing written")
+    else:
+        result.output_path = out
+    result.message = "; ".join(notes)
+    return result

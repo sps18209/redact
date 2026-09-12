@@ -23,6 +23,7 @@ from ..types import (
     RedactionResult,
 )
 from .base import Backend
+from .builtin import redact_docx_document
 
 
 def _module_present(name: str) -> bool:
@@ -35,7 +36,7 @@ def _module_present(name: str) -> bool:
 class PresidioBackend(Backend):
     name = "presidio"
     description = "Microsoft Presidio — NLP + rules PII detection/anonymization for text (MIT)."
-    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED)
+    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX)
     priority = 80  # beats the builtin engine when installed
 
     # Map the suite's neutral modes onto Presidio anonymizer operators.
@@ -64,6 +65,18 @@ class PresidioBackend(Backend):
             )
 
         from presidio_analyzer import AnalyzerEngine  # lazy, heavy
+
+        if document.media_type is MediaType.DOCX:
+            # Word rewriting needs a replacement *per entity* (each lands in the
+            # run where it starts), so Presidio supplies detection and the
+            # suite's own operators do the rewriting — modes stay identical
+            # across backends.
+            analyzer = _get_analyzer(AnalyzerEngine)
+            return redact_docx_document(
+                self.name, document, options,
+                detect=lambda text: _analyze(analyzer, text, options),
+            )
+
         from presidio_anonymizer import AnonymizerEngine
         from presidio_anonymizer.entities import OperatorConfig
 
@@ -129,6 +142,25 @@ class PresidioBackend(Backend):
             return result
         result.output_path = out
         return result
+
+
+def _analyze(analyzer, text: str, options: RedactionOptions) -> List[Entity]:
+    """Run Presidio over one segment and translate to the suite's Entity type."""
+    return [
+        Entity(
+            entity_type=r.entity_type,
+            score=float(r.score),
+            start=r.start,
+            end=r.end,
+            text=text[r.start : r.end],
+        )
+        for r in analyzer.analyze(
+            text=text,
+            language=options.language,
+            entities=options.entities,
+            score_threshold=options.threshold,
+        )
+    ]
 
 
 # Analyzer construction is expensive (loads NLP models); cache one per process.
