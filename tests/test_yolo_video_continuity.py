@@ -92,3 +92,29 @@ def test_verification_failure_returns_failed_result_and_removes_video(tmp_path, 
     # The audit record survives even though the unusable privacy artifact does not.
     sidecar = expected.with_name(expected.name + ".verification.json")
     assert sidecar.exists()
+
+
+def test_failed_rerun_cannot_leave_previous_output_or_sidecar(tmp_path, monkeypatch):
+    source = tmp_path / "clip.mp4"
+    make_video(source, 1)
+    mod = wire_stubs(monkeypatch, [[]])
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    expected = out_dir / "clip.redacted.mp4"
+    sidecar = expected.with_name(expected.name + ".verification.json")
+    expected.write_bytes(b"stale video")
+    sidecar.write_text('{"passed": true, "stale": true}')
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("synthetic render failure")
+
+    monkeypatch.setattr(mod, "_redact_video", boom)
+    result = YoloBackend().redact(
+        Document(path=source, media_type=MediaType.VIDEO),
+        RedactionOptions(output_dir=out_dir),
+    )
+
+    assert result.success is False
+    assert "synthetic render failure" in result.message
+    assert not expected.exists()
+    assert not sidecar.exists()
