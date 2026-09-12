@@ -42,7 +42,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/backends/philter.py` | Philter service over HTTP (stdlib urllib). |
 | `src/redact/backends/redactai.py` | RedactAI-style contextual PDF redaction via local Ollama. |
 | `src/redact/backends/pdf_redact_tools.py` | Shells out to `pdf-redact-tools` CLI. |
-| `src/redact/backends/anonymizer.py` | understand.ai Anonymizer (image/video), CLI/package. |
+| `src/redact/backends/deface.py` | deface face blurring (image/video) via its Python API. Note: `import deface` here resolves to the installed library, not this module (Python 3 absolute imports). |
+| `src/redact/backends/anonymizer.py` | understand.ai Anonymizer (image/video), legacy CLI. |
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
 | `src/redact/router.py` | `select_backend` / `candidates` — the selection policy. |
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
@@ -58,7 +59,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `presidio` | text, structured, docx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
-| `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`); `ffmpeg`+`ffprobe` for video. **Not** the PyPI `anonymizer` package — that's unrelated. |
+| `deface` | image, video | 70 | `deface` (pip). Bundled CenterFace ONNX model + static ffmpeg, so fully offline. **Faces only — no license plates.** |
+| `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`). **Legacy**: pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it does not install on current Python. Kept solely because it is the only backend covering **license plates**. Not the PyPI `anonymizer` package — that's unrelated. |
 | `pdf-redact-tools` | pdf | 40 | `pdf-redact-tools` on PATH |
 
 Priority orders auto-selection: purpose-built tools outrank the builtin fallback.
@@ -144,6 +146,13 @@ python -m redact list                 # module entry point equivalent
   `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
   real adapter code is exercised; the fake detects `PERSON`, a label the builtin
   engine cannot produce, which is how those tests prove Presidio drove the run.
+- **License-plate blurring is an open gap.** `deface` handles faces only, and
+  the only plate-capable backend (Anonymizer) no longer installs. If you add a
+  plate detector, give it priority above `deface` for images/video and report
+  its findings as a distinct entity label — do not fold plates into `FACE`.
+- `deface` drives the library's Python API, not its console script: `python -m
+  deface` does not work (no `__main__`), and the API additionally yields per-face
+  boxes, which is what populates `Entity.bbox`.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

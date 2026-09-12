@@ -3,6 +3,7 @@
 from .anonymizer import AnonymizerBackend
 from .base import Backend
 from .builtin import BuiltinBackend
+from .deface import DefaceBackend
 from .pdf_redact_tools import PdfRedactToolsBackend
 from .philter import PhilterBackend
 from .presidio import PresidioBackend
@@ -13,6 +14,7 @@ from .redactai import RedactAIBackend
 DEFAULT_BACKENDS = [
     BuiltinBackend,
     PresidioBackend,
+    DefaceBackend,
     PhilterBackend,
     RedactAIBackend,
     PdfRedactToolsBackend,
@@ -23,6 +25,7 @@ __all__ = [
     "Backend",
     "BuiltinBackend",
     "PresidioBackend",
+    "DefaceBackend",
     "PhilterBackend",
     "RedactAIBackend",
     "PdfRedactToolsBackend",

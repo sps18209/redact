@@ -31,7 +31,8 @@ each document to the tool that fits.
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
-| **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — blurs faces & license plates. Video via ffmpeg frame extraction. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`); `ffmpeg` for video |
+| **deface** | image, video | [deface](https://github.com/ORB-HD/deface) — CNN face blurring. Model ships in the wheel, so detection is fully offline; video needs no system ffmpeg. **Faces only.** | `pip install "redact-suite[deface]"` |
+| **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — faces **and license plates**. ⚠️ Unmaintained since 2019 and pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it will not install on a current interpreter. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`) |
 
 Backends report their own availability, so `redact list` always tells you what
 can run right now and exactly what each missing one needs.
@@ -44,12 +45,28 @@ pip install -e ".[presidio]"     # add Presidio
 pip install -e ".[all]"          # add every pip-installable backend
 ```
 
-Anonymizer is not on PyPI (the PyPI `anonymizer` project is unrelated):
+### Faces and license plates
+
+For **faces** in images and video, install `deface` — it is one pip command, its
+CenterFace model ships inside the wheel (no download, works air-gapped), and it
+brings a static ffmpeg so video needs nothing from the system:
 
 ```bash
-git clone https://github.com/understand-ai/anonymizer
-pip install -r anonymizer/requirements.txt
-export ANONYMIZER_HOME=$PWD/anonymizer   # weights auto-download on first run
+pip install "redact-suite[deface]"
+redact run ./footage -o ./clean          # auto-routes images and video to deface
+```
+
+**License plates are not covered by deface.** The only backend here that blurs
+plates is understand.ai's Anonymizer, which is unmaintained and pins
+`tensorflow-gpu==1.11.0` — it cannot be installed on Python 3.7+. It is kept
+wired up for anyone who can run it (an old interpreter, a container, or any
+CLI exposing the same interface via `ANONYMIZER_BIN`), but on a modern install
+plate blurring is an open gap rather than something the suite quietly pretends
+to handle:
+
+```bash
+git clone https://github.com/understand-ai/anonymizer     # needs Python <=3.6
+export ANONYMIZER_HOME=$PWD/anonymizer
 ```
 
 ## CLI

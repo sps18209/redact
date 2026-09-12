@@ -233,7 +233,7 @@ def _plan_images(
         )
         return
 
-    declined = 0
+    blurred = stripped = 0
     for name in media:
         data = zf.read(name)
         new_bytes = None
@@ -243,20 +243,27 @@ def _plan_images(
             except Exception:  # a failing redactor must not lose the document
                 new_bytes = None
         if new_bytes is None:
-            if policy == "blur":
-                declined += 1
+            # Stripping is the floor: an image we cannot process is never left
+            # in place, and the note must say so rather than claim a blur.
+            stripped += 1
             new_bytes = _blank_png()
             renamed = str(PurePosixPath(name).with_suffix(".png"))
             if renamed != name:
                 renames[name] = renamed
+        else:
+            blurred += 1
         replacements[name] = new_bytes
         result.entities.append(
             Entity(entity_type=IMAGE_ENTITY, score=1.0, text=PurePosixPath(name).name)
         )
-    verb = "stripped" if policy == "strip" else "blurred"
-    result.notes.append(f"{len(media)} embedded image(s) {verb}")
-    if declined:
-        result.notes.append(f"{declined} image(s) could not be blurred and were stripped")
+    if blurred and stripped:
+        result.notes.append(
+            f"{blurred} embedded image(s) blurred, {stripped} stripped (could not be processed)"
+        )
+    elif blurred:
+        result.notes.append(f"{blurred} embedded image(s) blurred")
+    else:
+        result.notes.append(f"{stripped} embedded image(s) stripped")
 
 
 def _blank_png() -> bytes:

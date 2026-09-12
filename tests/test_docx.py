@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from redact import RedactionOptions, RedactionSuite
+from redact.backends.base import Backend
 from redact.backends.builtin import BuiltinBackend
-from redact.document import Document, detect_media_type
+from redact.document import Document, detect_media_type, output_path
 from redact.docx import DocxError, extract_text
-from redact.types import MediaType, RedactionMode
+from redact.types import MediaType, RedactionMode, RedactionResult
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -354,7 +355,9 @@ def test_blur_uses_the_injected_redactor(tmp_path, docx):
 
 def test_blur_falls_back_to_strip_when_redactor_declines(tmp_path, docx):
     res = _redact(docx, tmp_path, docx_images="blur", extra={"image_redactor": lambda d, s: None})
-    assert "2 image(s) could not be blurred and were stripped" in res.message
+    # reported honestly as a strip: nothing was actually blurred
+    assert "2 embedded image(s) stripped" in res.message
+    assert "blurred" not in res.message
     with zipfile.ZipFile(res.output_path) as zf:
         assert zf.read("word/media/image1.png").startswith(b"\x89PNG")
 
@@ -386,32 +389,43 @@ def test_invalid_image_policy_is_a_failed_result(tmp_path, docx):
 # -- suite wiring: blur uses a real image backend -----------------------------
 
 def test_suite_injects_no_redactor_without_an_image_backend():
-    from redact import RedactionSuite
+    """No image-capable backend registered -> nothing to inject."""
+    from redact import BackendRegistry, RedactionSuite
+    from redact.backends.builtin import BuiltinBackend
 
-    suite = RedactionSuite()
-    # Anonymizer is the only image backend and is unconfigured here.
+    suite = RedactionSuite(registry=BackendRegistry([BuiltinBackend()]))
     assert suite._image_redactor() is None
 
 
-def test_suite_blur_uses_the_anonymizer_backend(tmp_path, docx, monkeypatch):
-    """End-to-end: --docx-images blur routes embedded images through Anonymizer."""
-    import stat
+class _StubImageBackend(Backend):
+    """Stands in for any image backend, so this test does not depend on installs."""
 
-    from redact import RedactionSuite
+    name = "stub-image"
+    supported_media_types = (MediaType.IMAGE,)
+    priority = 99
 
-    script = tmp_path / "fake_anonymize"
-    script.write_text(
-        "#!/bin/sh\n"
-        "while [ $# -gt 0 ]; do case \"$1\" in --input) IN=$2; shift;; "
-        "--image-output) OUT=$2; shift;; *) ;; esac; shift; done\n"
-        "for f in \"$IN\"/*; do printf 'BLURRED' > \"$OUT/$(basename $f)\"; done\n"
-    )
-    script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    monkeypatch.delenv("ANONYMIZER_HOME", raising=False)
-    monkeypatch.setenv("ANONYMIZER_BIN", str(script))
+    def missing_dependencies(self):
+        return []
 
-    suite = RedactionSuite()
+    def redact(self, document, options):
+        out = output_path(document, options)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"BLURRED")
+        return RedactionResult(
+            source=document.path, backend=self.name,
+            media_type=document.media_type, output_path=out,
+        )
+
+
+def test_suite_blur_routes_images_through_the_image_backend(tmp_path, docx):
+    """--docx-images blur hands each embedded image to the image backend."""
+    from redact import BackendRegistry, RedactionSuite
+    from redact.backends.builtin import BuiltinBackend
+
+    registry = BackendRegistry([BuiltinBackend(), _StubImageBackend()])
+    suite = RedactionSuite(registry=registry)
     assert suite._image_redactor() is not None
+
     res = suite.redact_path(
         docx, RedactionOptions(output_dir=tmp_path / "out", docx_images="blur")
     )
@@ -419,6 +433,18 @@ def test_suite_blur_uses_the_anonymizer_backend(tmp_path, docx, monkeypatch):
     assert "blurred" in res.message
     with zipfile.ZipFile(res.output_path) as zf:
         assert zf.read("word/media/image1.png") == b"BLURRED"
+        assert zf.read("word/media/photo.jpeg") == b"BLURRED"
+
+
+def test_image_redactor_picks_the_highest_priority_backend():
+    """Ties are broken by priority, so a working backend beats a legacy one."""
+    from redact import BackendRegistry, RedactionSuite
+    from redact.backends.anonymizer import AnonymizerBackend
+    from redact.backends.deface import DefaceBackend
+
+    assert DefaceBackend.priority > AnonymizerBackend.priority
+    suite = RedactionSuite(registry=BackendRegistry([_StubImageBackend(), BuiltinBackend()]))
+    assert suite._image_redactor() is not None
 
 
 def test_suite_does_not_mutate_the_caller_options(tmp_path, docx):
@@ -427,3 +453,16 @@ def test_suite_does_not_mutate_the_caller_options(tmp_path, docx):
     opts = RedactionOptions(output_dir=tmp_path / "out", docx_images="blur")
     RedactionSuite().redact_path(docx, opts)
     assert opts.extra == {}  # injection happens on a copy
+
+
+def test_image_notes_report_what_actually_happened(tmp_path, docx):
+    """A declined blur must be reported as a strip, never as a blur."""
+    # one image processed, one declined
+    calls = {"n": 0}
+
+    def flaky(data, suffix):
+        calls["n"] += 1
+        return b"BLURRED" if calls["n"] == 1 else None
+
+    res = _redact(docx, tmp_path, docx_images="blur", extra={"image_redactor": flaky})
+    assert "1 embedded image(s) blurred, 1 stripped (could not be processed)" in res.message

@@ -16,8 +16,15 @@ Any executable with the same interface can be used instead via
 ``~/.cache/redact-suite/anonymizer-weights``).
 
 Images are processed directly. Videos are handled by extracting frames with
-ffmpeg, anonymizing every frame, and re-encoding with the source's audio —
-which needs ``ffmpeg`` and ``ffprobe`` on PATH.
+ffmpeg, anonymizing every frame, and re-encoding with the source's audio. The
+ffmpeg binary is taken from ``PATH`` or, failing that, from ``imageio-ffmpeg``
+(which ships a static build), so a system ffmpeg is not required.
+
+Because upstream is unmaintained and pins ``tensorflow-gpu==1.11.0`` (Python 3.6
+and older), this backend is effectively unreachable on a current interpreter.
+It is kept because it is the only option here that blurs **license plates** as
+well as faces; for faces alone prefer the ``deface`` backend, which installs
+with one pip command.
 """
 
 from __future__ import annotations
@@ -77,19 +84,45 @@ def _run_anonymizer(in_dir: Path, out_dir: Path) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
 
 
+def _ffmpeg_bin() -> Optional[str]:
+    """A usable ffmpeg: the system one, else the static build imageio ships."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
 def _ffmpeg_missing() -> List[str]:
-    return [tool for tool in ("ffmpeg", "ffprobe") if not shutil.which(tool)]
+    return [] if _ffmpeg_bin() else ["ffmpeg (install it, or pip install imageio-ffmpeg)"]
 
 
 def _frame_rate(video: Path) -> str:
-    out = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", str(video),
-        ],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    return out or "30"
+    """Source frame rate, via ffprobe when present, else imageio, else 30."""
+    if shutil.which("ffprobe"):
+        out = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", str(video),
+            ],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        if out:
+            return out
+    try:
+        import imageio.v2 as iio
+
+        with iio.get_reader(str(video)) as reader:
+            fps = reader.get_meta_data().get("fps")
+        if fps:
+            return str(fps)
+    except Exception:
+        pass
+    return "30"
 
 
 def _anonymize_image(source: Path, out: Path) -> None:
@@ -114,15 +147,16 @@ def _anonymize_video(source: Path, out: Path) -> None:
         frames, blurred = Path(tmp) / "frames", Path(tmp) / "blurred"
         frames.mkdir()
         blurred.mkdir()
+        ffmpeg = _ffmpeg_bin()
         subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(source), str(frames / "%06d.png")],
+            [ffmpeg, "-y", "-v", "error", "-i", str(source), str(frames / "%06d.png")],
             check=True, capture_output=True, text=True,
         )
         _run_anonymizer(frames, blurred)
         out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
-                "ffmpeg", "-y", "-v", "error",
+                ffmpeg, "-y", "-v", "error",
                 "-framerate", fps, "-i", str(blurred / "%06d.png"),
                 "-i", str(source),
                 "-map", "0:v:0", "-map", "1:a?",      # blurred video + original audio
@@ -135,9 +169,12 @@ def _anonymize_video(source: Path, out: Path) -> None:
 
 class AnonymizerBackend(Backend):
     name = "anonymizer"
-    description = "understand.ai Anonymizer — blurs faces & license plates in images/video (CNN)."
+    description = (
+        "understand.ai Anonymizer — faces AND license plates (legacy: needs TF 1.x, "
+        "Python<=3.6; prefer 'deface' for faces)."
+    )
     supported_media_types = (MediaType.IMAGE, MediaType.VIDEO)
-    priority = 60
+    priority = 60  # below deface: this upstream no longer installs anywhere modern
 
     def missing_dependencies(self) -> List[str]:
         if _base_command() is None:
