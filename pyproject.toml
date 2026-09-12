@@ -29,6 +29,8 @@ presidio = ["presidio-analyzer", "presidio-anonymizer"]
 pdf = ["pypdf>=3.0"]
 # Face blurring for images/video: ships its own ONNX model and a static ffmpeg.
 deface = ["deface>=1.5"]
+# Open-vocabulary detection (license plates, prompt-driven) + semantic search.
+yolo = ["ultralytics>=8.3", "opencv-python"]
 # NOTE: understand-ai's Anonymizer is a git checkout, not a PyPI package (the
 # PyPI "anonymizer" project is unrelated) — see backends/anonymizer.py.
 dev = ["pytest>=7"]

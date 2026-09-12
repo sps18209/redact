@@ -24,3 +24,9 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Model checkpoints — downloaded on demand by Ultralytics/deface/CLIP, never committed
+*.pt
+*.onnx
+*.engine
+weights/

@@ -66,6 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument("--mask-char", default="*", help="character used in mask mode")
     p_run.add_argument(
+        "--yolo-model", default=None, metavar="CKPT",
+        help="YOLO checkpoint for the 'yolo' backend (default: an open-vocabulary "
+        "yolov8s-worldv2.pt; try yolo26x.pt for COCO classes)",
+    )
+    p_run.add_argument(
+        "--yolo-classes", default=None, metavar="A,B",
+        help="what the 'yolo' backend should mask, as text prompts, e.g. "
+        "\"license plate,human face\" (default: license plate, human face)",
+    )
+    p_run.add_argument(
         "--docx-images", default="keep", choices=["keep", "strip", "blur"],
         help="images embedded in a .docx: keep them (default), strip them to a "
         "blank placeholder, or blur faces/plates with an image backend",
@@ -120,6 +130,16 @@ def _parse_entities(raw: Optional[List[str]]) -> Optional[List[str]]:
     return labels or None
 
 
+def _yolo_extra(args: argparse.Namespace) -> dict:
+    """Backend-specific knobs travel in RedactionOptions.extra."""
+    extra = {}
+    if getattr(args, "yolo_model", None):
+        extra["yolo_model"] = args.yolo_model
+    if getattr(args, "yolo_classes", None):
+        extra["yolo_classes"] = args.yolo_classes
+    return extra
+
+
 def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
     options = RedactionOptions(
         backend=args.backend,
@@ -129,6 +149,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         threshold=args.threshold,
         mask_char=args.mask_char,
         docx_images=args.docx_images,
+        extra=_yolo_extra(args),
         output_dir=Path(args.out) if args.out else None,
         dry_run=args.dry_run,
     )

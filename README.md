@@ -31,6 +31,7 @@ each document to the tool that fits.
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
+| **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
 | **deface** | image, video | [deface](https://github.com/ORB-HD/deface) — CNN face blurring. Model ships in the wheel, so detection is fully offline; video needs no system ffmpeg. **Faces only.** | `pip install "redact-suite[deface]"` |
 | **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — faces **and license plates**. ⚠️ Unmaintained since 2019 and pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it will not install on a current interpreter. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`) |
 
@@ -56,13 +57,37 @@ pip install "redact-suite[deface]"
 redact run ./footage -o ./clean          # auto-routes images and video to deface
 ```
 
-**License plates are not covered by deface.** The only backend here that blurs
-plates is understand.ai's Anonymizer, which is unmaintained and pins
-`tensorflow-gpu==1.11.0` — it cannot be installed on Python 3.7+. It is kept
-wired up for anyone who can run it (an old interpreter, a container, or any
-CLI exposing the same interface via `ANONYMIZER_BIN`), but on a modern install
-plate blurring is an open gap rather than something the suite quietly pretends
-to handle:
+**deface does not cover license plates.** For those — and for anything else you
+can describe — use the `yolo` backend:
+
+```bash
+pip install "redact-suite[yolo]"
+redact run ./footage -b yolo                       # plates + faces, the defaults
+redact run ./footage -b yolo --yolo-classes "license plate,ID card,tattoo"
+```
+
+It runs an **open-vocabulary** YOLO-World model, so its classes are *text
+prompts*: name the thing and it is detected and masked, with no fine-tuning and
+no fixed class list. Each prompt gets its own entity label (`LICENSE_PLATE`,
+`ID_CARD`), never folded into `FACE`.
+
+> **The trap this avoids:** every stock YOLO checkpoint — **YOLO26 included** —
+> is COCO-trained with 80 classes, and *none of them is a license plate*. Asking
+> `yolo26x.pt` for plates would quietly find nothing and report a clean run. This
+> backend refuses instead, telling you what the checkpoint actually knows and
+> pointing at an open-vocabulary model. Closed-vocabulary checkpoints are still
+> useful for classes they do have:
+>
+> ```bash
+> redact run ./photos -b yolo --yolo-model yolo26x.pt --yolo-classes person
+> ```
+
+`yolo` sits *below* `deface` in priority on purpose: deface is a purpose-built
+face detector and is better at faces, so `auto` will not silently swap a
+specialist for a generalist. Ask for `-b yolo` when you need plates.
+
+The legacy `anonymizer` backend (faces *and* plates) is still wired up, but it
+pins `tensorflow-gpu==1.11.0` and installs only on Python ≤3.6:
 
 ```bash
 git clone https://github.com/understand-ai/anonymizer     # needs Python <=3.6
@@ -144,6 +169,8 @@ name/location detection inside `.docx` too.
 | `-o, --out` | output directory (default: alongside each source). The source tree is mirrored beneath it, so `inbox/a/x.txt` and `inbox/b/x.txt` never collide. |
 | `--threshold` | minimum confidence to act on a detection (default `0.35`) |
 | `--dry-run` | detect and report only |
+| `--yolo-model` | checkpoint for the `yolo` backend (default open-vocabulary `yolov8s-worldv2.pt`) |
+| `--yolo-classes` | text prompts for the `yolo` backend, e.g. `"license plate,ID card"` |
 | `--docx-images` | embedded images in a `.docx`: `keep` (default), `strip`, `blur` |
 | `--no-recursive` | do not walk directories recursively |
 

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..document import Document, output_path
+from ..media import ffmpeg_bin, video_fps
 from ..types import MediaType, RedactionOptions, RedactionResult
 from .base import Backend
 
@@ -84,21 +85,8 @@ def _run_anonymizer(in_dir: Path, out_dir: Path) -> None:
     subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
 
 
-def _ffmpeg_bin() -> Optional[str]:
-    """A usable ffmpeg: the system one, else the static build imageio ships."""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    try:
-        import imageio_ffmpeg
-
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        return None
-
-
 def _ffmpeg_missing() -> List[str]:
-    return [] if _ffmpeg_bin() else ["ffmpeg (install it, or pip install imageio-ffmpeg)"]
+    return [] if ffmpeg_bin() else ["ffmpeg (install it, or pip install imageio-ffmpeg)"]
 
 
 def _frame_rate(video: Path) -> str:
@@ -113,16 +101,7 @@ def _frame_rate(video: Path) -> str:
         ).stdout.strip()
         if out:
             return out
-    try:
-        import imageio.v2 as iio
-
-        with iio.get_reader(str(video)) as reader:
-            fps = reader.get_meta_data().get("fps")
-        if fps:
-            return str(fps)
-    except Exception:
-        pass
-    return "30"
+    return str(video_fps(video))
 
 
 def _anonymize_image(source: Path, out: Path) -> None:
@@ -147,7 +126,7 @@ def _anonymize_video(source: Path, out: Path) -> None:
         frames, blurred = Path(tmp) / "frames", Path(tmp) / "blurred"
         frames.mkdir()
         blurred.mkdir()
-        ffmpeg = _ffmpeg_bin()
+        ffmpeg = ffmpeg_bin()
         subprocess.run(
             [ffmpeg, "-y", "-v", "error", "-i", str(source), str(frames / "%06d.png")],
             check=True, capture_output=True, text=True,

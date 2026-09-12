@@ -42,6 +42,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/backends/philter.py` | Philter service over HTTP (stdlib urllib). |
 | `src/redact/backends/redactai.py` | RedactAI-style contextual PDF redaction via local Ollama. |
 | `src/redact/backends/pdf_redact_tools.py` | Shells out to `pdf-redact-tools` CLI. |
+| `src/redact/media.py` | Shared ffmpeg discovery (system, else the static `imageio-ffmpeg` build), video fps, and audio muxing. |
+| `src/redact/backends/yolo.py` | Ultralytics YOLO: open-vocabulary prompts (YOLO-World) or COCO classes; masks boxes with blur/mosaic/solid. |
 | `src/redact/backends/deface.py` | deface face blurring (image/video) via its Python API. Note: `import deface` here resolves to the installed library, not this module (Python 3 absolute imports). |
 | `src/redact/backends/anonymizer.py` | understand.ai Anonymizer (image/video), legacy CLI. |
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
@@ -59,6 +61,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `presidio` | text, structured, docx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
+| `yolo` | image, video | 65 | `ultralytics` + `opencv-python`. Open-vocabulary (YOLO-World) by default, so classes are text prompts — **the only working license-plate path**. Below deface on purpose: deface is the better *face* detector, so `auto` keeps it. |
 | `deface` | image, video | 70 | `deface` (pip). Bundled CenterFace ONNX model + static ffmpeg, so fully offline. **Faces only — no license plates.** |
 | `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`). **Legacy**: pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it does not install on current Python. Kept solely because it is the only backend covering **license plates**. Not the PyPI `anonymizer` package — that's unrelated. |
 | `pdf-redact-tools` | pdf | 40 | `pdf-redact-tools` on PATH |
@@ -146,10 +149,26 @@ python -m redact list                 # module entry point equivalent
   `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
   real adapter code is exercised; the fake detects `PERSON`, a label the builtin
   engine cannot produce, which is how those tests prove Presidio drove the run.
-- **License-plate blurring is an open gap.** `deface` handles faces only, and
-  the only plate-capable backend (Anonymizer) no longer installs. If you add a
-  plate detector, give it priority above `deface` for images/video and report
-  its findings as a distinct entity label — do not fold plates into `FACE`.
+- **License plates go through the `yolo` backend**, which is open-vocabulary:
+  its "classes" are text prompts, so plates need no fine-tuning. Each prompt
+  gets its own entity label via `yolo.entity_label` — never fold a prompt into
+  `FACE`.
+- **No stock YOLO checkpoint has a license-plate class** — YOLO26 included; they
+  are all COCO's 80 classes. `yolo._load_model` therefore *raises* when a
+  requested class is not in a closed-vocabulary model's list, rather than
+  returning zero detections that would read as a clean run. Preserve that: a
+  redaction tool reporting "nothing found" when it structurally cannot find the
+  thing is the worst possible failure mode.
+- Real-model YOLO tests download weights and are gated behind
+  `REDACT_TEST_YOLO_WEIGHTS=1`; the rest stub `_load_model`/`_detect` so CI stays
+  fast and offline.
+- **Checkpoints must never land in the user's CWD.** Ultralytics downloads a bare
+  name (`yolo26x.pt`) into the working directory; `yolo.resolve_weights` turns
+  bare names into paths under `~/.cache/redact-suite/yolo`
+  (`REDACT_YOLO_WEIGHTS_DIR` overrides) so a full path is passed instead.
+  Explicit paths are honoured untouched. `.gitignore` also excludes `*.pt`,
+  `*.onnx` and `weights/` — a push of committed weights is rejected by the
+  repo's pre-receive hook.
 - `deface` drives the library's Python API, not its console script: `python -m
   deface` does not work (no `__main__`), and the API additionally yields per-face
   boxes, which is what populates `Entity.bbox`.

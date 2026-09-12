@@ -8,6 +8,7 @@ from .pdf_redact_tools import PdfRedactToolsBackend
 from .philter import PhilterBackend
 from .presidio import PresidioBackend
 from .redactai import RedactAIBackend
+from .yolo import YoloBackend
 
 #: The backend classes registered by default, in no particular order (the
 #: router orders by media type + priority + availability at selection time).
@@ -18,6 +19,7 @@ DEFAULT_BACKENDS = [
     PhilterBackend,
     RedactAIBackend,
     PdfRedactToolsBackend,
+    YoloBackend,
     AnonymizerBackend,
 ]
 
@@ -29,6 +31,7 @@ __all__ = [
     "PhilterBackend",
     "RedactAIBackend",
     "PdfRedactToolsBackend",
+    "YoloBackend",
     "AnonymizerBackend",
     "DEFAULT_BACKENDS",
 ]
