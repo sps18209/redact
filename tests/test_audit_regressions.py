@@ -1,6 +1,5 @@
 """Regression tests for defects found in the post-build audit."""
 
-import os
 import shutil
 import stat
 import sys
@@ -11,9 +10,8 @@ import pytest
 from redact.backends.anonymizer import AnonymizerBackend
 from redact.backends.base import Backend
 from redact.backends.builtin import detect_entities
-from redact.backends.redactai import _sidecar_path
 from redact.cli import _parse_entities, build_parser, main
-from redact.document import Document, _expand_input, is_redaction_output, iter_documents
+from redact.document import Document, _expand_input, is_redaction_output, iter_documents, output_path
 from redact.types import MediaType, RedactionOptions
 
 
@@ -39,7 +37,7 @@ def test_credit_card_does_not_swallow_trailing_separator():
 
 def test_absolute_glob_pattern_does_not_crash(tmp_path):
     (tmp_path / "x.txt").write_text("hi")
-    matches = _expand_input(str(tmp_path / "*.txt"), recursive=True)
+    _, matches = _expand_input(str(tmp_path / "*.txt"), recursive=True)
     assert [m.name for m in matches] == ["x.txt"]
 
 
@@ -79,10 +77,11 @@ def test_running_twice_is_idempotent(tmp_path):
 # -- output naming -----------------------------------------------------------
 
 def test_redactai_sidecar_name_is_not_doubled(tmp_path):
-    out = _sidecar_path(Path("report.pdf"), RedactionOptions(output_dir=tmp_path))
+    doc = Document(path=Path("report.pdf"), media_type=MediaType.PDF)
+    out = output_path(doc, RedactionOptions(output_dir=tmp_path), suffix=".txt")
     assert out.name == "report.redacted.txt"
-    out = _sidecar_path(Path("notes.txt"), RedactionOptions())
-    assert out.name == "notes.redacted.txt"
+    doc = Document(path=Path("notes.txt"), media_type=MediaType.TEXT)
+    assert output_path(doc, RedactionOptions(), suffix=".txt").name == "notes.redacted.txt"
 
 
 # -- CLI ---------------------------------------------------------------------

@@ -14,7 +14,7 @@ from __future__ import annotations
 import importlib.util
 from typing import List
 
-from ..document import Document
+from ..document import Document, output_path
 from ..types import (
     Entity,
     MediaType,
@@ -23,7 +23,6 @@ from ..types import (
     RedactionResult,
 )
 from .base import Backend
-from .builtin import default_output_path
 
 
 def _module_present(name: str) -> bool:
@@ -120,7 +119,7 @@ class PresidioBackend(Backend):
             result.message = "dry-run: detected only, nothing written"
             return result
 
-        out = default_output_path(document.path, options)
+        out = output_path(document, options)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(anonymized.text, encoding="utf-8")

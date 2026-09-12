@@ -21,7 +21,7 @@ def test_backends_declare_supported_media_types():
         coverage.update(cls().supported_media_types)
     # The suite as a whole should cover every real media type.
     assert {
-        MediaType.TEXT, MediaType.STRUCTURED, MediaType.PDF,
+        MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.PDF,
         MediaType.IMAGE, MediaType.VIDEO,
     } <= coverage
 

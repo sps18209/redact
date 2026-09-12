@@ -11,16 +11,14 @@ See https://philterd.ai/
 
 from __future__ import annotations
 
-import json
 import os
 import urllib.error
 import urllib.request
 from typing import List
 
-from ..document import Document
+from ..document import Document, output_path
 from ..types import Entity, MediaType, RedactionOptions, RedactionResult
 from .base import Backend
-from .builtin import default_output_path
 
 _DEFAULT_ENDPOINT = "http://localhost:8080"
 _HEALTH_TIMEOUT = 2.0
@@ -85,7 +83,7 @@ class PhilterBackend(Backend):
             result.message = "dry-run: filtered via philter, nothing written"
             return result
 
-        out = default_output_path(document.path, options)
+        out = output_path(document, options)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(redacted, encoding="utf-8")

@@ -14,13 +14,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
 
 from .document import Document, iter_documents, load_document
 from .registry import BackendRegistry
 from .router import RoutingError, select_backend
-from .types import MediaType, RedactionOptions, RedactionResult
+from .types import RedactionOptions, RedactionResult
 
 
 class RedactionSuite:

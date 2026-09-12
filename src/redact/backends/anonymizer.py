@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from ..document import Document
+from ..document import Document, output_path
 from ..types import MediaType, RedactionOptions, RedactionResult
 from .base import Backend
 
@@ -90,11 +90,6 @@ def _frame_rate(video: Path) -> str:
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     return out or "30"
-
-
-def _output_path(source: Path, options: RedactionOptions) -> Path:
-    out_dir = Path(options.output_dir) if options.output_dir else source.parent
-    return out_dir / (source.stem + ".redacted" + source.suffix)
 
 
 def _anonymize_image(source: Path, out: Path) -> None:
@@ -168,7 +163,7 @@ class AnonymizerBackend(Backend):
             result.message = "dry-run: would blur faces/plates (no detection counts available pre-run)"
             return result
 
-        out = _output_path(document.path, options)
+        out = output_path(document, options)
         try:
             if document.media_type is MediaType.VIDEO:
                 _anonymize_video(document.path, out)

@@ -5,7 +5,7 @@ Guidance for Claude Code (and humans) working in this repository.
 ## What this is
 
 `redact-suite` is a **unified PII/PHI redaction suite**. It ingests any document
-(text, structured data, PDF, image, video), detects its media type, and routes
+(text, structured data, Word .docx, PDF, image, video), detects its media type, and routes
 it to the best *available* redaction backend — or one the user names explicitly.
 A dependency-free rule engine ships built in, so the suite always works; every
 heavy tool (Presidio, Philter, RedactAI/Ollama, pdf-redact-tools, Anonymizer) is
@@ -34,7 +34,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | Path | Responsibility |
 |---|---|
 | `src/redact/types.py` | Core dataclasses/enums: `MediaType`, `RedactionMode`, `Entity`, `RedactionOptions`, `RedactionResult`. Dependency-free — the shared vocabulary. |
-| `src/redact/document.py` | Ingestion: `MediaType` detection, `load_document`, `iter_documents` (files/dirs/globs). |
+| `src/redact/document.py` | Ingestion: `MediaType` detection, `load_document`, `iter_documents` (files/dirs/globs), and **`output_path`** — the one rule for where artifacts go. |
+| `src/redact/docx.py` | Stdlib `.docx` support: paragraph-level detection mapped back onto `<w:t>` runs, all text parts + core-properties authors, Word-safe XML round-trip. |
 | `src/redact/backends/base.py` | `Backend` ABC — the adapter contract. |
 | `src/redact/backends/builtin.py` | Offline regex/rule engine. Also exports reusable `detect_entities` / `apply_redactions`. Always available. |
 | `src/redact/backends/presidio.py` | Microsoft Presidio (text/structured), optional import. |
@@ -53,7 +54,7 @@ CLI, and every adapter are decoupled from any specific tool.
 
 | Name | Media types | Priority | Requires |
 |---|---|---|---|
-| `builtin` | text, structured | 10 | nothing (stdlib) |
+| `builtin` | text, structured, docx | 10 | nothing (stdlib) |
 | `presidio` | text, structured | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
@@ -102,8 +103,19 @@ python -m redact list                 # module entry point equivalent
 - `Backend.is_available()` is memoised for 60s (some adapters probe a network
   service). Use `refresh_availability()` if a test or caller changes the
   environment mid-process.
-- Output files always go to `<stem>.redacted<suffix>` — never `.with_suffix()`
-  on an already-suffixed name (that's how `.redacted.redacted` happened).
+- **`document.output_path(document, options, suffix=None)` is the only place
+  output naming lives.** It yields `<stem>.redacted<suffix>` beside the source,
+  or under `-o` with the path relative to `Document.root` mirrored (so equal
+  filenames in different folders don't collide). Backends must call it — never
+  compute paths themselves, and never `.with_suffix()` an already-suffixed name
+  (that's how `.redacted.redacted` happened).
+- `Document.root` is set by `iter_documents` (the directory walked, or a glob's
+  wildcard-free prefix) and is `None` for a directly loaded file. Preserve it
+  when constructing documents in new code paths.
+- **`.docx` goes through `docx.redact_docx`** with `detect`/`replace` callbacks
+  so any text engine can drive it; today only the builtin backend does. When
+  editing `docx.py`, keep the root-tag preservation — ElementTree drops unused
+  namespace declarations and Word then rejects the file (`mc:Ignorable`).
 
 ## Adding a new backend
 
@@ -115,6 +127,8 @@ python -m redact list                 # module entry point equivalent
 
 ## Notes for future sessions
 
+- Presidio does not yet handle `.docx`; wiring it up means passing its analyzer
+  as `detect` and a per-entity anonymize as `replace` into `docx.redact_docx`.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from pathlib import Path
 from typing import List
 
-from ..document import Document
+from ..document import Document, output_path
 from ..types import MediaType, RedactionOptions, RedactionResult
 from .base import Backend
 
@@ -61,13 +60,16 @@ class PdfRedactToolsBackend(Backend):
             result.message = f"{_BINARY} failed: {exc.stderr.strip() or exc}"
             return result
 
+        # The tool writes "<stem>-final.pdf" beside the input; move it to the
+        # suite's canonical "<stem>.redacted.pdf" (mirrored under -o if given).
         produced = document.path.with_name(document.path.stem + "-final.pdf")
-        if options.output_dir and produced.exists():
-            dest = Path(options.output_dir) / produced.name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(produced), str(dest))
-            produced = dest
-
-        result.output_path = produced if produced.exists() else None
+        if not produced.exists():
+            result.success = False
+            result.message = f"{_BINARY} exited 0 but {produced.name} was not written"
+            return result
+        dest = output_path(document, options)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(produced), str(dest))
+        result.output_path = dest
         result.message = "sanitised: text layer & metadata stripped"
         return result

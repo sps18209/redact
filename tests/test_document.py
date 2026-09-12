@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from redact.document import detect_media_type, iter_documents, load_document

@@ -1,6 +1,4 @@
 from redact import RedactionOptions, RedactionSuite
-from redact.registry import BackendRegistry
-from redact.types import MediaType
 
 
 def test_suite_redacts_text_file_via_builtin(tmp_path):

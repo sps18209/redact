@@ -1,7 +1,7 @@
 # redact-suite
 
 A unified **PII/PHI redaction suite**. Point it at *any* document — text, CSV/JSON,
-PDF, image, or video — and it routes each file to the best available redaction
+Word (.docx), PDF, image, or video — and it routes each file to the best available redaction
 tool, or one you pick by hand. A dependency-free rule engine ships built in, so
 the suite works out of the box and every heavy tool is opt-in.
 
@@ -26,7 +26,7 @@ each document to the tool that fits.
 
 | Backend | Handles | What it does | Requires |
 |---|---|---|---|
-| **builtin** | text, structured | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Always available. | nothing (stdlib) |
+| **builtin** | text, structured, docx | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Word documents in place, formatting intact. Always available. | nothing (stdlib) |
 | **presidio** | text, structured | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
@@ -68,6 +68,23 @@ redact run notes.txt -e EMAIL_ADDRESS,US_SSN   # only these entity types (or rep
 Re-running over the same folder is safe: the suite never re-ingests its own
 `*.redacted.*` outputs, and it skips hidden directories such as `.git`.
 
+Outputs are always named `<stem>.redacted<ext>`. With `-o`, each file's path
+relative to the folder (or glob prefix) you passed is mirrored under the output
+directory: `redact run inbox -o clean` turns `inbox/hr/x.txt` into
+`clean/hr/x.redacted.txt`.
+
+### Word documents
+
+`.docx` files are redacted **in place as Word documents** — you get a `.docx`
+back with formatting, images and layout intact, not a text dump. Word often
+splits one word across several runs (after spell-check or formatting), so
+detection runs on each paragraph's full text and the placeholder is written into
+the run where the match started. Body, headers, footers, footnotes, endnotes and
+comments are all processed, and the author fields in the document properties are
+scrubbed (reported as `DOCUMENT_AUTHOR`; pass `-e` to opt out). Text inside
+tracked deletions, field codes and embedded images is not touched. Stdlib only —
+no `python-docx` needed.
+
 ### `run` options
 
 | Flag | Meaning |
@@ -75,7 +92,7 @@ Re-running over the same folder is safe: the suite never re-ingests its own
 | `-b, --backend` | backend name, or `auto` (default) to let the suite choose |
 | `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` |
 | `-e, --entities` | restrict detection to these labels (comma-separated or repeated) |
-| `-o, --out` | output directory (default: alongside each source) |
+| `-o, --out` | output directory (default: alongside each source). The source tree is mirrored beneath it, so `inbox/a/x.txt` and `inbox/b/x.txt` never collide. |
 | `--threshold` | minimum confidence to act on a detection (default `0.35`) |
 | `--dry-run` | detect and report only |
 | `--no-recursive` | do not walk directories recursively |

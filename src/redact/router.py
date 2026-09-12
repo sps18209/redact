@@ -11,12 +11,12 @@ Given a document and the user's options, the router decides which backend runs:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from .backends.base import Backend
 from .document import Document
 from .registry import BackendRegistry
-from .types import MediaType, RedactionOptions
+from .types import RedactionOptions
 
 
 class RoutingError(Exception):

@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import List, Optional
 
-from ..document import Document
+from ..document import Document, output_path
 from ..types import (
     Entity,
     MediaType,
@@ -174,24 +173,21 @@ def apply_redactions(
     return result
 
 
-def default_output_path(source: Path, options: RedactionOptions) -> Path:
-    stem = source.stem + ".redacted" + source.suffix
-    out_dir = options.output_dir or source.parent
-    return Path(out_dir) / stem
-
 
 class BuiltinBackend(Backend):
     """Rule-based, offline redactor for text and structured files."""
 
     name = "builtin"
     description = "Dependency-free regex/rule engine for text & structured data (always available)."
-    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED)
+    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX)
     priority = 10  # low: a safe fallback, beaten by purpose-built tools
 
     def missing_dependencies(self) -> List[str]:
         return []  # stdlib only
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
+        if document.media_type is MediaType.DOCX:
+            return self._redact_docx(document, options)
         try:
             text = document.read_text()
         except OSError as exc:
@@ -218,7 +214,7 @@ class BuiltinBackend(Backend):
             result.message = "dry-run: detected only, nothing written"
             return result
 
-        out = default_output_path(document.path, options)
+        out = output_path(document, options)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(redacted, encoding="utf-8")
@@ -227,4 +223,34 @@ class BuiltinBackend(Backend):
             result.message = f"could not write output: {exc}"
             return result
         result.output_path = out
+        return result
+
+    def _redact_docx(self, document: Document, options: RedactionOptions) -> RedactionResult:
+        """Word documents: paragraph-level detection mapped back onto runs."""
+        from ..docx import AUTHOR_ENTITY, DocxError, redact_docx  # stdlib only, but keep discovery lean
+
+        result = RedactionResult(
+            source=document.path, backend=self.name, media_type=document.media_type,
+        )
+        wanted = options.entities
+        out = None if options.dry_run else output_path(document, options)
+        try:
+            docx = redact_docx(
+                document.path,
+                out,
+                detect=lambda text: detect_entities(text, wanted, options.threshold),
+                replace=lambda entity: _replacement(entity, options),
+                scrub_authors=(wanted is None or AUTHOR_ENTITY in wanted),
+            )
+        except (DocxError, OSError) as exc:
+            result.success = False
+            result.message = f"could not redact .docx: {exc}"
+            return result
+
+        result.entities = docx.entities
+        result.redacted_text = docx.redacted_text
+        if options.dry_run:
+            result.message = "dry-run: detected only, nothing written"
+        else:
+            result.output_path = out
         return result

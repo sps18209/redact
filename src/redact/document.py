@@ -3,17 +3,19 @@
 This module normalizes arbitrary inputs (single files, directories, glob
 patterns) into :class:`Document` objects with a detected :class:`MediaType`, so
 the rest of the suite never has to care where content came from or how to sniff
-its type.
+its type. It also owns :func:`output_path`, the single rule for where a backend
+writes its artifact.
 """
 
 from __future__ import annotations
 
 import glob as _glob
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, List
+from typing import Iterable, Iterator, List, Optional, Tuple
 
-from .types import MediaType
+from .types import MediaType, RedactionOptions
 
 # Extension -> MediaType. Kept deliberately broad; unknown extensions fall back
 # to magic-byte sniffing and finally to MediaType.UNKNOWN.
@@ -30,6 +32,8 @@ _EXTENSION_MAP = {
     ".ndjson": MediaType.STRUCTURED, ".xml": MediaType.STRUCTURED,
     ".yaml": MediaType.STRUCTURED, ".yml": MediaType.STRUCTURED,
     ".log": MediaType.STRUCTURED,
+    # office
+    ".docx": MediaType.DOCX,
     # pdf
     ".pdf": MediaType.PDF,
     # images
@@ -56,6 +60,8 @@ _MAGIC = [
 # (hidden directories such as ``.git`` are skipped as well).
 _SKIP_DIRS = {"node_modules", "__pycache__", "venv"}
 
+_GLOB_CHARS = "*?["
+
 
 def is_redaction_output(path: Path) -> bool:
     """True for artifacts the suite itself produces.
@@ -77,6 +83,11 @@ class Document:
 
     path: Path
     media_type: MediaType
+    #: The directory this document was discovered under (a directory or glob
+    #: input). :func:`output_path` mirrors the tree beneath it so two files
+    #: with the same name in different folders never collide in ``-o``.
+    #: ``None`` for a document loaded directly by path.
+    root: Optional[Path] = None
 
     @property
     def name(self) -> str:
@@ -100,6 +111,18 @@ class Document:
         return self.path.read_text(encoding=encoding, errors=errors)
 
 
+def _sniff_zip(path: Path) -> MediaType:
+    """Distinguish Office containers from arbitrary zips."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return MediaType.UNKNOWN
+    if "word/document.xml" in names:
+        return MediaType.DOCX
+    return MediaType.UNKNOWN
+
+
 def _sniff_magic(path: Path) -> MediaType:
     """Best-effort content sniffing when the extension is unhelpful."""
     try:
@@ -109,6 +132,8 @@ def _sniff_magic(path: Path) -> MediaType:
         return MediaType.UNKNOWN
     if not head:
         return MediaType.UNKNOWN
+    if head.startswith(b"PK\x03\x04"):
+        return _sniff_zip(path)
     for sig, mt in _MAGIC:
         if head.startswith(sig):
             # Disambiguate RIFF containers (WEBP image vs AVI video).
@@ -168,26 +193,39 @@ def iter_documents(
     :func:`is_redaction_output`) are always skipped.
     """
     for raw in inputs:
-        for path in _expand_input(raw, recursive):
+        root, paths = _expand_input(raw, recursive)
+        for path in paths:
             if is_redaction_output(path):
                 continue
             mt = detect_media_type(path)
             if mt is MediaType.UNKNOWN and not include_unknown:
                 continue
-            yield Document(path=path, media_type=mt)
+            yield Document(path=path, media_type=mt, root=root)
 
 
-def _expand_input(raw: str, recursive: bool) -> List[Path]:
+def _expand_input(raw: str, recursive: bool) -> Tuple[Optional[Path], List[Path]]:
+    """Expand one input into ``(root, files)``; ``root`` anchors tree mirroring."""
     p = Path(raw)
     if p.is_dir():
         globber = p.rglob("*") if recursive else p.glob("*")
-        return sorted(f for f in globber if f.is_file() and not _in_skipped_dir(f, p))
+        files = sorted(f for f in globber if f.is_file() and not _in_skipped_dir(f, p))
+        return p, files
     if p.is_file():
-        return [p]
+        return None, [p]
     # Treat as a glob pattern. ``glob.glob`` handles absolute patterns, which
     # ``Path().glob`` rejects, and ``**`` when recursive.
     matches = sorted(Path(m) for m in _glob.glob(raw, recursive=recursive))
-    return [m for m in matches if m.is_file()]
+    return _glob_root(raw), [m for m in matches if m.is_file()]
+
+
+def _glob_root(pattern: str) -> Path:
+    """The leading wildcard-free directory of a pattern (``inbox/**/*.txt`` -> ``inbox``)."""
+    fixed: List[str] = []
+    for part in Path(pattern).parts:
+        if any(c in part for c in _GLOB_CHARS):
+            break
+        fixed.append(part)
+    return Path(*fixed) if fixed else Path()
 
 
 def _in_skipped_dir(path: Path, root: Path) -> bool:
@@ -196,3 +234,34 @@ def _in_skipped_dir(path: Path, root: Path) -> bool:
         if part.startswith(".") or part in _SKIP_DIRS:
             return True
     return False
+
+
+def output_path(
+    document: Document, options: RedactionOptions, suffix: Optional[str] = None
+) -> Path:
+    """Where a backend should write its artifact for ``document``.
+
+    The artifact is always named ``<stem>.redacted<suffix>`` (``suffix``
+    defaults to the source's own, e.g. ``report.pdf`` -> ``report.redacted.pdf``;
+    pass ``".txt"`` for a text sidecar). Without an output directory it sits
+    beside the source. With one, the document's path relative to its ingestion
+    :attr:`Document.root` is mirrored beneath it, so ``inbox/a/x.txt`` and
+    ``inbox/b/x.txt`` become ``out/a/x.redacted.txt`` and ``out/b/x.redacted.txt``
+    instead of overwriting each other.
+
+    This is the one place output naming lives; backends must not roll their own.
+    """
+    src = document.path
+    name = src.stem + ".redacted" + (src.suffix if suffix is None else suffix)
+    if not options.output_dir:
+        return src.parent / name
+    return Path(options.output_dir) / _relative_dir(document) / name
+
+
+def _relative_dir(document: Document) -> Path:
+    if document.root is None:
+        return Path()
+    try:
+        return document.path.relative_to(document.root).parent
+    except ValueError:  # path not under root (shouldn't happen; stay flat)
+        return Path()
