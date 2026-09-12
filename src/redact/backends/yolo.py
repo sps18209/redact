@@ -51,7 +51,11 @@ from ..types import (
     RedactionOptions,
     RedactionResult,
 )
-from ..verification import verify_video_output, write_verification_sidecar
+from ..verification import (
+    verification_sidecar_path,
+    verify_video_output,
+    write_verification_sidecar,
+)
 from .base import Backend
 
 #: Default checkpoint: open-vocabulary, so text prompts work out of the box.
@@ -162,6 +166,12 @@ class YoloBackend(Backend):
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             if document.media_type is MediaType.VIDEO:
+                # A failed rerun must not leave a previous run's output or audit
+                # record behind. Clear both before doing any work so filesystem
+                # state cannot contradict a failed RedactionResult.
+                out.unlink(missing_ok=True)
+                verification_sidecar_path(out).unlink(missing_ok=True)
+
                 found, frames, audio, continuity = _redact_video(
                     document.path,
                     out,
