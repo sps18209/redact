@@ -94,10 +94,52 @@ git clone https://github.com/understand-ai/anonymizer     # needs Python <=3.6
 export ANONYMIZER_HOME=$PWD/anonymizer
 ```
 
+## Semantic search
+
+Redaction starts with a question a filename cannot answer: *which* of these ten
+thousand frames shows a whiteboard, a badge, a screen full of records? Install
+the `semantic` extra and describe it:
+
+```bash
+pip install "redact-suite[semantic]"
+
+redact search "a photo of an ID card" ./footage --top 10
+redact search "a whiteboard with writing" ./footage --index idx.npz   # cache it
+```
+
+Images and sampled video frames are embedded with CLIP into the same space as
+English text, so video hits report the moment they occur:
+
+```
+3 match(es) for 'a bus on a city street' across 11 embedded frame(s):
+  +0.9994  bus.jpg
+  +0.2963  clip.mp4 @ 0.6s (frame 3)
+  +0.0000  noise.png
+```
+
+You can also let a search decide *what gets redacted*:
+
+```bash
+redact run ./footage --match "a whiteboard with writing" --match-threshold 0.05
+```
+
+Text files and PDFs are always passed through — a visual filter must never
+silently drop the documents in a mixed folder.
+
+> **Why the scores are calibrated.** Raw CLIP cosine similarity is meaningful
+> only *between texts for one image*, never as an absolute number across images.
+> Measured on this corpus, random noise scored **0.2099** against "a football
+> player" while a real photo of footballers scored **0.1972** — thresholding raw
+> similarity ranks noise above the real thing. Every score above is instead the
+> query's softmax share against a set of generic background prompts, which puts
+> the footballers on top and drops the noise to **0.0001**. Pass `--raw-scores`
+> for the uncalibrated numbers.
+
 ## CLI
 
 ```bash
 redact list                          # show backends and availability
+redact search "an ID card" ./inbox   # rank images/video by a description
 redact detect ./inbox                # show detected media type per file
 redact run report.pdf                # auto-route one file
 redact run ./inbox -o ./clean        # ingest a whole folder, write to ./clean
@@ -172,6 +214,8 @@ name/location detection inside `.docx` too.
 | `--yolo-model` | checkpoint for the `yolo` backend (default open-vocabulary `yolov8s-worldv2.pt`) |
 | `--yolo-classes` | text prompts for the `yolo` backend, e.g. `"license plate,ID card"` |
 | `--docx-images` | embedded images in a `.docx`: `keep` (default), `strip`, `blur` |
+| `--match` | only redact visual files matching this description |
+| `--match-threshold` | calibrated score a `--match` must reach (0-1, default `0.05`) |
 | `--no-recursive` | do not walk directories recursively |
 
 ## Library

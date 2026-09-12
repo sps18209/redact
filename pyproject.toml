@@ -31,6 +31,8 @@ pdf = ["pypdf>=3.0"]
 deface = ["deface>=1.5"]
 # Open-vocabulary detection (license plates, prompt-driven) + semantic search.
 yolo = ["ultralytics>=8.3", "opencv-python"]
+# CLIP semantic search over images and video frames.
+semantic = ["torch", "clip @ git+https://github.com/openai/CLIP.git", "pillow", "imageio"]
 # NOTE: understand-ai's Anonymizer is a git checkout, not a PyPI package (the
 # PyPI "anonymizer" project is unrelated) — see backends/anonymizer.py.
 dev = ["pytest>=7"]

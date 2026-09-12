@@ -5,6 +5,7 @@ Subcommands
 ``redact list``               show every backend and whether it is available
 ``redact detect <inputs>``    show the detected media type for each input
 ``redact run <inputs>``       ingest and redact inputs (files, dirs, globs)
+``redact search <q> <inputs>`` rank images/video by how well they match a phrase
 """
 
 from __future__ import annotations
@@ -90,6 +91,48 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument(
         "--include-unknown", action="store_true", help="attempt files of unknown type"
     )
+    p_run.add_argument(
+        "--match", default=None, metavar="PHRASE",
+        help="only redact visual files matching this description (semantic search); "
+        "text and PDFs are always kept",
+    )
+    p_run.add_argument(
+        "--match-threshold", type=float, default=0.05, metavar="T",
+        help="calibrated score a file must reach to count as a --match "
+        "(0-1, default: 0.05); see 'redact search' to pick one",
+    )
+
+    # search
+    p_search = sub.add_parser(
+        "search", help="rank images/video by how well they match a description"
+    )
+    p_search.add_argument("query", help="what to look for, in plain language")
+    p_search.add_argument("inputs", nargs="+", help="files, directories, or globs")
+    p_search.add_argument("--top", type=int, default=10, help="results to show (default: 10)")
+    p_search.add_argument(
+        "--threshold", type=float, default=0.0,
+        help="minimum score to report (default: 0.0)",
+    )
+    p_search.add_argument(
+        "--raw-scores", action="store_true",
+        help="report uncalibrated cosine similarity instead of the calibrated "
+        "score (raw similarity is not comparable across images)",
+    )
+    p_search.add_argument(
+        "--index", default=None, metavar="FILE",
+        help="reuse/write an index here instead of embedding every time",
+    )
+    p_search.add_argument(
+        "--frames", type=int, default=8, metavar="N",
+        help="frames sampled per video (default: 8)",
+    )
+    p_search.add_argument(
+        "--all-frames", action="store_true",
+        help="report every matching frame, not just each file's best",
+    )
+    p_search.add_argument(
+        "--no-recursive", action="store_true", help="do not walk directories recursively"
+    )
     return parser
 
 
@@ -154,14 +197,25 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
 
+    documents = iter_documents(
+        args.inputs, not args.no_recursive, args.include_unknown
+    )
+    if getattr(args, "match", None):
+        from .semantic import SemanticError, filter_documents
+
+        try:
+            documents = filter_documents(documents, args.match, args.match_threshold)
+        except SemanticError as exc:
+            print(f"--match unavailable: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"--match '{args.match}': {len(documents)} file(s) selected",
+            file=sys.stderr,
+        )
+
     total = 0
     failures = 0
-    for result in suite.redact_paths(
-        args.inputs,
-        options,
-        recursive=not args.no_recursive,
-        include_unknown=args.include_unknown,
-    ):
+    for result in (suite.redact_document(doc, options) for doc in documents):
         total += 1
         if not result.success:
             failures += 1
@@ -172,6 +226,40 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         return 1
     print(f"\n{total} document(s) processed, {failures} failed.", file=sys.stderr)
     return 1 if failures else 0
+
+
+def _cmd_search(args: argparse.Namespace) -> int:
+    from .semantic import ClipEmbedder, SemanticError, SemanticIndex
+
+    try:
+        embedder = ClipEmbedder()
+        if args.index and Path(args.index).is_file():
+            index = SemanticIndex.load(args.index)
+        else:
+            docs = iter_documents(args.inputs, not args.no_recursive)
+            index = SemanticIndex.build(docs, embedder, frames_per_video=args.frames)
+            if args.index:
+                index.save(args.index)
+        if not len(index):
+            print("no images or video found to search", file=sys.stderr)
+            return 1
+        matches = index.query(
+            args.query, embedder, top_k=args.top,
+            threshold=args.threshold, per_file=not args.all_frames,
+            calibrate=not args.raw_scores,
+        )
+    except SemanticError as exc:
+        print(f"semantic search unavailable: {exc}", file=sys.stderr)
+        return 2
+
+    if not matches:
+        print("no matches above the threshold", file=sys.stderr)
+        return 1
+    print(f"{len(matches)} match(es) for {args.query!r} "
+          f"across {len(index)} embedded frame(s):")
+    for m in matches:
+        print("  " + m.describe())
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -198,6 +286,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     if args.command == "run":
         return _cmd_run(suite, args)
+    if args.command == "search":
+        return _cmd_search(args)
 
     parser.print_help()
     return 1

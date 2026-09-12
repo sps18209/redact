@@ -42,6 +42,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/backends/philter.py` | Philter service over HTTP (stdlib urllib). |
 | `src/redact/backends/redactai.py` | RedactAI-style contextual PDF redaction via local Ollama. |
 | `src/redact/backends/pdf_redact_tools.py` | Shells out to `pdf-redact-tools` CLI. |
+| `src/redact/semantic.py` | CLIP semantic search: embed images + sampled video frames, calibrated scoring, on-disk index, and `filter_documents` behind `run --match`. |
 | `src/redact/media.py` | Shared ffmpeg discovery (system, else the static `imageio-ffmpeg` build), video fps, and audio muxing. |
 | `src/redact/backends/yolo.py` | Ultralytics YOLO: open-vocabulary prompts (YOLO-World) or COCO classes; masks boxes with blur/mosaic/solid. |
 | `src/redact/backends/deface.py` | deface face blurring (image/video) via its Python API. Note: `import deface` here resolves to the installed library, not this module (Python 3 absolute imports). |
@@ -49,7 +50,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
 | `src/redact/router.py` | `select_backend` / `candidates` — the selection policy. |
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
-| `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run`. |
+| `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `search`. |
 | `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
 | `.github/workflows/ci.yml` | CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
 
@@ -159,6 +160,17 @@ python -m redact list                 # module entry point equivalent
   returning zero detections that would read as a clean run. Preserve that: a
   redaction tool reporting "nothing found" when it structurally cannot find the
   thing is the worst possible failure mode.
+- **CLIP scores must stay calibrated.** Raw cosine similarity is not comparable
+   across images: measured here, random noise beat a real photo of footballers
+   for the query "a football player" (0.2099 vs 0.1972). `SemanticIndex.query`
+   therefore returns the query's softmax share against `BACKGROUND_PROMPTS`
+   (noise drops to 0.0001). Do not "simplify" this back to a bare dot product,
+   and keep `calibrate=False` available for callers who want the raw number.
+- `filter_documents` (behind `run --match`) passes non-visual documents through
+  untouched — a visual filter silently dropping the text files in a mixed folder
+  would be a data-loss bug, not a feature.
+- Semantic tests use a fake 3-d embedder so CI needs neither torch nor weights;
+  the real-CLIP test is gated behind `REDACT_TEST_CLIP=1`.
 - Real-model YOLO tests download weights and are gated behind
   `REDACT_TEST_YOLO_WEIGHTS=1`; the rest stub `_load_model`/`_detect` so CI stays
   fast and offline.
