@@ -24,6 +24,11 @@ than reporting a clean run: unmatched class names are reported as an error
 listing what the model actually knows. Use a YOLO-World model (the default) or a
 plate-fine-tuned checkpoint instead.
 
+Video masking carries detections through short detector misses (two frames by
+default) and re-opens every completed export to verify that it decodes end to
+end with the expected frame count. A machine-readable verification sidecar is
+written next to the redacted video.
+
 Weights download on first use and are cached by Ultralytics.
 Install with ``pip install "redact-suite[yolo]"``.
 """
@@ -36,6 +41,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Sequence
 
+from ..continuity import TemporalMaskTracker
 from ..document import Document, output_path
 from ..media import mux_audio, video_fps
 from ..types import (
@@ -45,6 +51,7 @@ from ..types import (
     RedactionOptions,
     RedactionResult,
 )
+from ..verification import verify_video_output, write_verification_sidecar
 from .base import Backend
 
 #: Default checkpoint: open-vocabulary, so text prompts work out of the box.
@@ -52,6 +59,10 @@ DEFAULT_MODEL = "yolov8s-worldv2.pt"
 
 #: Default prompts — the two things a privacy pass almost always wants.
 DEFAULT_CLASSES = ("license plate", "human face")
+
+#: Maximum detector-miss run bridged by temporal masking. This is deliberately
+#: short: the goal is to close one-frame/two-frame jitter, not invent tracks.
+DEFAULT_TEMPORAL_GAP = 2
 
 _BLUR_KERNEL = 31
 _MOSAIC_BLOCKS = 12
@@ -91,8 +102,6 @@ class YoloBackend(Backend):
 
     # -- configuration -------------------------------------------------------
     def _model_name(self, options: RedactionOptions) -> str:
-        import os
-
         return (
             options.extra.get("yolo_model")
             or os.environ.get("REDACT_YOLO_MODEL")
@@ -106,6 +115,15 @@ class YoloBackend(Backend):
         if isinstance(raw, str):
             raw = raw.split(",")
         return [c.strip() for c in raw if c.strip()]
+
+    def _temporal_gap(self, options: RedactionOptions) -> int:
+        raw = options.extra.get("temporal_gap", DEFAULT_TEMPORAL_GAP)
+        try:
+            gap = int(raw)
+        except (TypeError, ValueError):
+            gap = DEFAULT_TEMPORAL_GAP
+        # Keep the escape hatch bounded. Zero explicitly disables propagation.
+        return max(0, min(10, gap))
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
         result = RedactionResult(
@@ -144,13 +162,44 @@ class YoloBackend(Backend):
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
             if document.media_type is MediaType.VIDEO:
-                found, frames, audio = _redact_video(
-                    document.path, out, model, labels, options.threshold, strategy
+                found, frames, audio, continuity = _redact_video(
+                    document.path,
+                    out,
+                    model,
+                    labels,
+                    options.threshold,
+                    strategy,
+                    max_gap=self._temporal_gap(options),
                 )
+                verification = verify_video_output(
+                    out,
+                    expected_frames=frames,
+                    continuity=continuity,
+                    audio_preserved=audio,
+                )
+                try:
+                    sidecar = write_verification_sidecar(out, verification)
+                except Exception as exc:
+                    out.unlink(missing_ok=True)
+                    result.success = False
+                    result.message = f"verification sidecar failed: {exc}"
+                    return result
+                if not verification["passed"]:
+                    out.unlink(missing_ok=True)
+                    result.success = False
+                    result.message = (
+                        "video verification failed: "
+                        + "; ".join(verification["errors"])
+                        + f"; report: {sidecar}"
+                    )
+                    return result
+
                 note = "" if audio else "; audio not preserved"
+                repairs = continuity["interpolated_masks"] + continuity["propagated_masks"]
                 result.message = (
                     f"{found} detection(s) across {frames} frame(s) masked ({strategy})"
-                    f" for: {', '.join(wanted)}{note}"
+                    f" for: {', '.join(wanted)}; verified; "
+                    f"{repairs} temporal continuity mask(s); report: {sidecar}{note}"
                 )
             else:
                 result.entities = _redact_image(
@@ -185,8 +234,6 @@ _MODEL_CACHE = {}
 
 def weights_dir() -> Path:
     """Where checkpoints are cached (``REDACT_YOLO_WEIGHTS_DIR`` to override)."""
-    import os
-
     return Path(
         os.environ.get(
             "REDACT_YOLO_WEIGHTS_DIR", Path.home() / ".cache" / "redact-suite" / "yolo"
@@ -312,34 +359,62 @@ def _redact_image(source: Path, out: Path, model, labels, threshold, strategy) -
     ]
 
 
-def _redact_video(source: Path, out: Path, model, labels, threshold, strategy):
-    """Mask every frame; returns ``(detections, frames, audio_preserved)``."""
+def _redact_video(
+    source: Path,
+    out: Path,
+    model,
+    labels,
+    threshold,
+    strategy,
+    *,
+    max_gap: int = DEFAULT_TEMPORAL_GAP,
+):
+    """Mask every frame with bounded continuity.
+
+    Returns ``(raw_detections, frames, audio_preserved, continuity_stats)``.
+    Only ``max_gap + 1`` source frames are retained at a time.
+    """
     import imageio.v2 as iio
 
     fps = video_fps(source)
     found = frames = 0
+    continuity = TemporalMaskTracker(max_gap=max_gap)
+    frame_buffer = {}
+
     with tempfile.TemporaryDirectory() as tmp:
         silent = Path(tmp) / ("v" + (out.suffix or ".mp4"))
         reader = iio.get_reader(str(source))
         writer = iio.get_writer(str(silent), fps=fps, macro_block_size=1)
         try:
-            for frame in reader:
-                frame = frame.copy()  # reader buffers may be read-only
-                detections = _detect(model, frame, labels, threshold)
-                _apply(frame, detections, strategy)
-                writer.append_data(frame)
-                found += len(detections)
+            for frame_index, frame in enumerate(reader):
+                raw = _detect(model, frame, labels, threshold)
+                found += len(raw)
                 frames += 1
+                frame_buffer[frame_index] = frame.copy()  # reader buffers may be read-only
+                for ready_index, masks in continuity.push(frame_index, raw):
+                    ready = frame_buffer.pop(ready_index)
+                    _apply(ready, masks, strategy)
+                    writer.append_data(ready)
+
+            for ready_index, masks in continuity.flush():
+                ready = frame_buffer.pop(ready_index)
+                _apply(ready, masks, strategy)
+                writer.append_data(ready)
+            if frame_buffer:
+                raise RuntimeError(
+                    f"temporal continuity left {len(frame_buffer)} frame(s) unresolved"
+                )
         finally:
             writer.close()
             reader.close()
+
         # Re-attach the original audio when we can; otherwise keep the silent render.
         audio = mux_audio(silent, source, out)
         if not audio:
             import shutil
 
             shutil.copy2(silent, out)
-    return found, frames, audio
+    return found, frames, audio, continuity.stats()
 
 
 def _summarise(entities: Sequence[Entity]) -> str:
