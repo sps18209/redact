@@ -56,7 +56,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
 | `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `search`. |
 | `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
-| `.github/workflows/ci.yml` | CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
+| `.github/workflows/ci.yml` | Fast CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
+| `.github/workflows/heavy.yml` | Weekly/dispatch CI that actually downloads models: runs the `REDACT_TEST_YOLO_WEIGHTS`/`REDACT_TEST_CLIP` gated tests, and proves the real Presidio library reports itself available. |
 
 ## Backends
 
@@ -186,7 +187,13 @@ python -m redact list                 # module entry point equivalent
   the real-CLIP test is gated behind `REDACT_TEST_CLIP=1`.
 - Real-model YOLO tests download weights and are gated behind
   `REDACT_TEST_YOLO_WEIGHTS=1`; the rest stub `_load_model`/`_detect` so CI stays
-  fast and offline.
+  fast and offline. **The gated tests are not optional** — `.github/workflows/heavy.yml`
+  runs them weekly with the env vars set, so an upstream break in
+  Ultralytics/CLIP/Presidio surfaces in CI rather than in a user's hands.
+- Installing Presidio here needs `pip install --ignore-installed PyYAML ...`:
+  pip cannot uninstall the Debian-provided PyYAML and aborts the whole install
+  otherwise. Note that `pip ... | tail` hides this, because the pipeline's exit
+  status is `tail`'s — check the log, not the exit code.
 - **Checkpoints must never land in the user's CWD.** Ultralytics downloads a bare
   name (`yolo26x.pt`) into the working directory; `yolo.resolve_weights` turns
   bare names into paths under `~/.cache/redact-suite/yolo`

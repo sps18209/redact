@@ -1,0 +1,66 @@
+name: Heavy models
+
+# The weight-gated tests are skipped in the fast CI job because they download
+# hundreds of MB of model checkpoints. They still need to run *somewhere*, or a
+# breaking change in Ultralytics/CLIP would only surface in a user's hands.
+on:
+  schedule:
+    - cron: "0 5 * * 1"   # Mondays, 05:00 UTC
+  workflow_dispatch:       # and on demand
+
+jobs:
+  vision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Checkpoints are large and stable; re-downloading them every week is
+      # wasteful and makes the job fail whenever an upstream host is flaky.
+      - name: Cache model checkpoints
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/redact-suite
+          key: redact-weights-v1
+
+      - name: Install with vision extras
+        run: pip install -e ".[dev,yolo,deface,semantic]"
+
+      - name: Run the weight-gated tests for real
+        env:
+          REDACT_TEST_YOLO_WEIGHTS: "1"
+          REDACT_TEST_CLIP: "1"
+        run: pytest -q tests/test_yolo.py tests/test_deface.py tests/test_semantic.py
+
+      - name: Full suite with every extra installed
+        run: pytest -q
+
+  presidio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with Presidio
+        run: |
+          pip install -e ".[dev,presidio]"
+          python -m spacy download en_core_web_sm
+      # The Presidio tests run against injected fakes in fast CI; here the real
+      # library must be importable and the backend must report itself available.
+      - name: Prove the real library is wired up
+        run: |
+          python -c "
+          from redact.backends.presidio import PresidioBackend
+          b = PresidioBackend()
+          missing = b.missing_dependencies()
+          assert not missing, f'presidio reported unavailable: {missing}'
+          print('presidio available:', b.refresh_availability())
+          "
+      - name: Full suite
+        run: pytest -q
