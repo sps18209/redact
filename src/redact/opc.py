@@ -152,6 +152,29 @@ def write_zip(
 
 # -- text rewriting --------------------------------------------------------------
 
+def resolve_overlaps(entities: Sequence[Entity]) -> List[Entity]:
+    """Drop entities that overlap an already-kept span, longest-first.
+
+    Detectors routinely return overlapping spans — Presidio reports
+    ``jane.doe@example.com`` as one EMAIL_ADDRESS *and* two URLs covering parts
+    of it. Rewriting naively then interleaves replacements and produces garbage
+    like ``<EMAIL_ADDRESS><URL>e@<URL>``, so every rewrite path resolves
+    overlaps first: earliest start wins, ties broken by longer span then higher
+    score.
+    """
+    ordered = sorted(
+        (e for e in entities if e.start is not None and e.end is not None),
+        key=lambda e: (e.start, -(e.end - e.start), -e.score),
+    )
+    kept: List[Entity] = []
+    last_end = -1
+    for e in ordered:
+        if e.start >= last_end:
+            kept.append(e)
+            last_end = e.end
+    return kept
+
+
 def rewrite_pieces(
     pieces: Sequence[Piece], detect: Detect, replace: Replace
 ) -> Tuple[str, str, List[Entity], bool]:
@@ -169,10 +192,7 @@ def rewrite_pieces(
     full = "".join(t for _, t in pieces)
     if not full.strip():
         return full, full, [], False
-    entities = sorted(
-        (e for e in detect(full) if e.start is not None and e.end is not None),
-        key=lambda e: e.start,
-    )
+    entities = resolve_overlaps(detect(full))
     if not entities:
         return full, full, [], False
     reps = {id(e): replace(e) for e in entities}
@@ -207,10 +227,7 @@ def rewrite_pieces(
 
 def apply_text(text: str, detect: Detect, replace: Replace) -> Tuple[str, List[Entity]]:
     """Redact a standalone string (attribute or relationship target)."""
-    entities = sorted(
-        (e for e in detect(text) if e.start is not None and e.end is not None),
-        key=lambda e: e.start,
-    )
+    entities = resolve_overlaps(detect(text))
     if not entities:
         return text, []
     out, cur = "", 0

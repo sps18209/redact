@@ -1,13 +1,12 @@
 from redact import RedactionOptions, RedactionSuite
 
 
-def test_suite_redacts_text_file_via_builtin(tmp_path):
+def test_suite_redacts_text_file_via_builtin(tmp_path, builtin_only_suite):
     src = tmp_path / "note.txt"
     src.write_text("contact a@b.com or 123-45-6789")
-    suite = RedactionSuite()
-    res = suite.redact_path(src, RedactionOptions(output_dir=tmp_path))
+    res = builtin_only_suite.redact_path(src, RedactionOptions(output_dir=tmp_path))
     assert res.success
-    assert res.backend == "builtin"  # only offline backend available in CI
+    assert res.backend == "builtin"
     assert res.entity_count == 2
     assert res.output_path.exists()
 

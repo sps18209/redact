@@ -157,9 +157,22 @@ python -m redact list                 # module entry point equivalent
 
 ## Notes for future sessions
 
-- Presidio drives `.docx` for *detection*; the rewrite uses the suite's own
-  `replacement_for`, because run-level editing needs a string per entity rather
-  than one anonymized blob. Modes therefore behave identically across backends.
+- **Presidio supplies detection only, for every media type.** The rewrite uses
+  the suite's own operators, so modes behave identically across backends. There
+  is deliberately no separate text path: an earlier version let Presidio's
+  `AnonymizerEngine` handle plain text, which bypassed the deterministic union
+  below and shipped a `.txt` file with the SSN still in it while reporting
+  success. One `detect` function, one rewrite path.
+- **`presidio._analyze` unions the builtin recognizers in.** Presidio is a model
+  and misses things a regex does not — with `en_core_web_sm` it returned
+  *nothing* for `SSN\t123-45-6789`. Since Presidio outranks builtin in the
+  router, installing it would otherwise find *less*. A redaction tool must never
+  detect less because you installed something better; keep the union.
+- **Every rewrite path resolves overlapping spans** (`opc.resolve_overlaps`).
+  Presidio reports one email as an EMAIL_ADDRESS *and* two URLs inside it;
+  rewriting naively interleaves them into `<EMAIL_ADDRESS><URL>e@<URL>`.
+- Prefer `en_core_web_lg`. With `en_core_web_sm` Presidio tags the word "Reach"
+  as a PERSON.
 - Presidio is not installed in CI. `tests/test_presidio_docx.py` injects fake
   `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
   real adapter code is exercised; the fake detects `PERSON`, a label the builtin

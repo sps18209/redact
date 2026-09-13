@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from redact import RedactionOptions, RedactionSuite
+from redact import RedactionOptions
 from redact.backends.builtin import BuiltinBackend
 from redact.document import Document, detect_media_type
 from redact.types import MediaType, RedactionMode
@@ -267,8 +267,8 @@ def test_dry_run_detects_but_writes_nothing(tmp_path, xlsx):
     assert list(tmp_path.iterdir()) == [xlsx]
 
 
-def test_suite_routes_xlsx_and_reruns_are_idempotent(tmp_path, xlsx):
-    suite = RedactionSuite()
+def test_suite_routes_xlsx_and_reruns_are_idempotent(tmp_path, xlsx, builtin_only_suite):
+    suite = builtin_only_suite
     res = suite.redact_path(xlsx, RedactionOptions(output_dir=tmp_path / "o"))
     assert res.success and res.backend == "builtin"
     list(suite.redact_paths([str(tmp_path)]))
@@ -291,3 +291,27 @@ def test_presidio_driver_covers_xlsx():
     from redact.backends.presidio import PresidioBackend
 
     assert PresidioBackend().supports(MediaType.XLSX)
+
+
+def test_overlapping_detections_do_not_corrupt_cell_text(tmp_path, xlsx):
+    """A detector returning nested spans must not interleave replacements."""
+    from redact.backends.builtin import replacement_for
+    from redact.types import Entity
+    from redact.xlsx import redact_xlsx
+
+    def overlapping(text):
+        if "jane.doe@example.com" not in text:
+            return []
+        i = text.index("jane.doe@example.com")
+        return [
+            Entity("EMAIL_ADDRESS", 1.0, i, i + 20, text[i : i + 20]),
+            Entity("URL", 0.5, i, i + 7, text[i : i + 7]),
+            Entity("URL", 0.5, i + 9, i + 20, text[i + 9 : i + 20]),
+        ]
+
+    out = tmp_path / "o.xlsx"
+    opts = RedactionOptions()
+    redact_xlsx(xlsx, out, detect=overlapping, replace=lambda e: replacement_for(e, opts))
+    with zipfile.ZipFile(out) as zf:
+        strings = _shared(zf)
+    assert strings[1] == "<EMAIL_ADDRESS>"  # not "<EMAIL_ADDRESS><URL>e@<URL>"

@@ -194,8 +194,8 @@ def test_dry_run_detects_but_writes_nothing(tmp_path, docx):
     assert list(tmp_path.iterdir()) == [docx]
 
 
-def test_suite_routes_docx_to_builtin(tmp_path, docx):
-    res = RedactionSuite().redact_path(docx, RedactionOptions(output_dir=tmp_path / "o"))
+def test_suite_routes_docx_to_builtin(tmp_path, docx, builtin_only_suite):
+    res = builtin_only_suite.redact_path(docx, RedactionOptions(output_dir=tmp_path / "o"))
     assert res.success and res.backend == "builtin"
 
 

@@ -21,7 +21,8 @@ def test_cli_detect(tmp_path, capsys):
 def test_cli_run_dry_run(tmp_path, capsys):
     src = tmp_path / "a.txt"
     src.write_text("mail a@b.com")
-    rc = main(["run", str(src), "--dry-run"])
+    # -b builtin, so the assertion does not depend on which backends are installed
+    rc = main(["run", str(src), "--dry-run", "-b", "builtin"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "builtin" in out

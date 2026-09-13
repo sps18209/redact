@@ -80,11 +80,14 @@ def docx(tmp_path):
     return make_docx(tmp_path / "memo.docx")
 
 
-def test_presidio_reports_unavailable_without_the_library():
+def test_presidio_reports_unavailable_without_the_library(monkeypatch):
+    """Simulate absence rather than keying off whatever happens to be installed."""
+    import redact.backends.presidio as mod
+
+    monkeypatch.setattr(mod, "_module_present", lambda name: False)
     backend = PresidioBackend()
-    if "presidio_analyzer" not in sys.modules:
-        assert backend.missing_dependencies()
-        assert not backend.supports.__self__.is_available()
+    assert backend.missing_dependencies() == ["presidio-analyzer"]
+    assert backend.refresh_availability() is False
 
 
 def test_presidio_declares_docx_support():
@@ -107,12 +110,16 @@ def test_presidio_drives_docx_rewrite(fake_presidio, tmp_path, docx):
     with zipfile.ZipFile(res.output_path) as zf:
         body = zf.read("word/document.xml")
     texts = [t.text for t in ET.fromstring(body).iter(f"{{{W_NS}}}t")]
-    # Presidio's PERSON findings were applied ...
+    # Presidio's PERSON findings were applied — a label the builtin engine
+    # cannot produce, so Presidio genuinely drove the run ...
     assert "<PERSON>" in texts
     assert "new text" not in texts and "click here" not in texts
-    # ... and the builtin engine did not also run (its labels are absent)
-    assert b"EMAIL_ADDRESS" not in body
-    assert {e.entity_type for e in res.entities} == {"PERSON", "DOCUMENT_AUTHOR"}
+    labels = {e.entity_type for e in res.entities}
+    assert "PERSON" in labels and "DOCUMENT_AUTHOR" in labels
+    # ... *and* the deterministic recognizers are unioned in, so upgrading to
+    # Presidio never finds less than the builtin engine would have.
+    assert "EMAIL_ADDRESS" in labels
+    assert b"jane.doe@example.com" not in body
 
 
 def test_presidio_docx_honours_mask_mode(fake_presidio, tmp_path, docx):
@@ -149,9 +156,19 @@ def test_router_prefers_presidio_over_builtin_for_docx(fake_presidio, tmp_path, 
     assert res.backend == "presidio"  # priority 80 beats builtin's 10
 
 
-def test_builtin_still_handles_docx_when_presidio_absent(tmp_path, docx):
-    res = RedactionSuite().redact_path(docx, RedactionOptions(output_dir=tmp_path / "out"))
+def test_builtin_still_handles_docx_when_presidio_absent(tmp_path, docx, builtin_only_suite):
+    """Without Presidio the builtin engine must still cover .docx."""
+    res = builtin_only_suite.redact_path(docx, RedactionOptions(output_dir=tmp_path / "out"))
     assert res.backend == "builtin" and res.success
+
+
+def test_presidio_outranks_builtin_for_office_formats():
+    """The routing policy itself, independent of what is installed."""
+    from redact.backends.builtin import BuiltinBackend
+
+    assert PresidioBackend.priority > BuiltinBackend.priority
+    for media in (MediaType.TEXT, MediaType.DOCX, MediaType.XLSX):
+        assert PresidioBackend().supports(media) and BuiltinBackend().supports(media)
 
 
 def test_analyzer_is_constructed_once_across_documents(fake_presidio, tmp_path, docx):
@@ -173,3 +190,59 @@ def test_presidio_text_path_still_works(fake_presidio, tmp_path):
     )
     assert res.success
     assert res.output_path.read_text() == "say <PERSON> please"
+
+
+# -- overlap resolution & deterministic union ---------------------------------
+
+class _OverlappingAnalyzer:
+    """Returns overlapping spans, as real Presidio does for an email."""
+
+    def analyze(self, text, language="en", entities=None, score_threshold=0.0):
+        return [
+            _Result("EMAIL_ADDRESS", 9, 29, 1.0),
+            _Result("URL", 9, 16, 0.5),   # inside the email
+            _Result("URL", 18, 29, 0.5),  # also inside the email
+        ]
+
+
+def test_overlapping_spans_are_resolved_longest_first(fake_presidio):
+    """Naive rewriting of overlaps produced '<EMAIL_ADDRESS><URL>e@<URL>'."""
+    from redact.backends.presidio import _analyze
+    from redact.types import RedactionOptions
+
+    found = _analyze(_OverlappingAnalyzer(), "Contact: jane.doe@example.com", RedactionOptions())
+    spans = [(e.entity_type, e.start, e.end) for e in found]
+    assert ("EMAIL_ADDRESS", 9, 29) in spans
+    assert not any(t == "URL" for t, _, _ in spans)  # swallowed by the longer span
+    # and nothing overlaps anything else
+    ordered = sorted(found, key=lambda e: e.start)
+    assert all(a.end <= b.start for a, b in zip(ordered, ordered[1:]))
+
+
+class _BlindAnalyzer:
+    """A model that misses a pattern the deterministic engine catches."""
+
+    def analyze(self, text, language="en", entities=None, score_threshold=0.0):
+        return []
+
+
+def test_presidio_never_loses_deterministic_detections(fake_presidio):
+    """Presidio outranks builtin, so it must not detect *less* than builtin."""
+    from redact.backends.presidio import _analyze
+    from redact.types import RedactionOptions
+
+    text = "SSN\t123-45-6789 and a@b.com"
+    found = _analyze(_BlindAnalyzer(), text, RedactionOptions())
+    labels = {e.entity_type for e in found}
+    assert "US_SSN" in labels and "EMAIL_ADDRESS" in labels
+
+
+def test_union_respects_the_entity_filter(fake_presidio):
+    from redact.backends.presidio import _analyze
+    from redact.types import RedactionOptions
+
+    found = _analyze(
+        _BlindAnalyzer(), "SSN 123-45-6789 and a@b.com",
+        RedactionOptions(entities=["EMAIL_ADDRESS"]),
+    )
+    assert {e.entity_type for e in found} == {"EMAIL_ADDRESS"}

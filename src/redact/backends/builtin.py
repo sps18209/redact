@@ -17,6 +17,7 @@ import re
 from typing import List, Optional
 
 from ..document import Document, output_path
+from ..opc import resolve_overlaps
 from ..types import (
     Entity,
     MediaType,
@@ -131,18 +132,8 @@ def detect_entities(
 
 
 def _dedupe_overlaps(entities: List[Entity]) -> List[Entity]:
-    """Drop entities fully contained within a higher-priority earlier span."""
-    ordered = sorted(
-        entities,
-        key=lambda e: (e.start, -(e.end - e.start), -e.score),
-    )
-    kept: List[Entity] = []
-    last_end = -1
-    for e in ordered:
-        if e.start >= last_end:
-            kept.append(e)
-            last_end = e.end
-    return kept
+    """Drop entities overlapping an earlier, longer span (see opc.resolve_overlaps)."""
+    return resolve_overlaps(entities)
 
 
 def replacement_for(entity: Entity, options: RedactionOptions) -> str:

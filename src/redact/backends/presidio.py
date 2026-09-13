@@ -6,7 +6,11 @@ in the router. The heavy imports happen lazily inside ``redact``/discovery so
 that merely importing this module never pulls in spaCy.
 
 Install with:  ``pip install "redact-suite[presidio]"`` then
-``python -m spacy download en_core_web_lg``
+``python -m spacy download en_core_web_lg`` (the small ``en_core_web_sm`` model
+is noticeably weaker — measured here it tagged the word "Reach" as a PERSON).
+
+Presidio supplies *detection* only; the suite's own operators do the rewriting,
+so redaction modes behave identically across every backend and media type.
 """
 
 from __future__ import annotations
@@ -22,8 +26,9 @@ from ..types import (
     RedactionOptions,
     RedactionResult,
 )
+from ..opc import resolve_overlaps
 from .base import Backend
-from .builtin import redact_office_document
+from .builtin import apply_redactions, detect_entities, redact_office_document
 
 
 def _module_present(name: str) -> bool:
@@ -53,8 +58,6 @@ class PresidioBackend(Backend):
         missing = []
         if not _module_present("presidio_analyzer"):
             missing.append("presidio-analyzer")
-        if not _module_present("presidio_anonymizer"):
-            missing.append("presidio-anonymizer")
         return missing
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
@@ -68,19 +71,18 @@ class PresidioBackend(Backend):
 
         from presidio_analyzer import AnalyzerEngine  # lazy, heavy
 
-        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
-            # Word rewriting needs a replacement *per entity* (each lands in the
-            # run where it starts), so Presidio supplies detection and the
-            # suite's own operators do the rewriting — modes stay identical
-            # across backends.
-            analyzer = _get_analyzer(AnalyzerEngine)
-            return redact_office_document(
-                self.name, document, options,
-                detect=lambda text: _analyze(analyzer, text, options),
-            )
+        analyzer = _get_analyzer(AnalyzerEngine)
+        detect = lambda text: _analyze(analyzer, text, options)  # noqa: E731
 
-        from presidio_anonymizer import AnonymizerEngine
-        from presidio_anonymizer.entities import OperatorConfig
+        # Every media type goes through the same detection, and the suite's own
+        # operators do the rewriting. Office rewriting needs a replacement *per
+        # entity* (each lands in the run where it starts) and plain text must
+        # agree with it, so there is deliberately no second code path here:
+        # an earlier version let Presidio's AnonymizerEngine handle text, which
+        # skipped the deterministic union below and shipped a .txt file with the
+        # SSN still in it.
+        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
+            return redact_office_document(self.name, document, options, detect=detect)
 
         try:
             text = document.read_text()
@@ -91,44 +93,13 @@ class PresidioBackend(Backend):
                 message=f"could not read file: {exc}",
             )
 
-        analyzer = _get_analyzer(AnalyzerEngine)
-        results = analyzer.analyze(
-            text=text,
-            language=options.language,
-            entities=options.entities,  # None => all
-            score_threshold=options.threshold,
-        )
-
-        entities = [
-            Entity(
-                entity_type=r.entity_type,
-                score=float(r.score),
-                start=r.start,
-                end=r.end,
-                text=text[r.start : r.end],
-            )
-            for r in results
-        ]
-
-        operator = self._OPERATOR.get(options.mode, "replace")
-        op_params = {}
-        if operator == "mask":
-            op_params = {
-                "masking_char": options.mask_char,
-                "chars_to_mask": 100,
-                "from_end": False,
-            }
-        anonymizer = AnonymizerEngine()
-        anonymized = anonymizer.anonymize(
-            text=text,
-            analyzer_results=results,
-            operators={"DEFAULT": OperatorConfig(operator, op_params)},
-        )
+        entities = detect(text)
+        redacted = apply_redactions(text, entities, options)
 
         result = RedactionResult(
             source=document.path, backend=self.name,
             media_type=document.media_type, entities=entities,
-            redacted_text=anonymized.text,
+            redacted_text=redacted,
         )
         if options.dry_run:
             result.message = "dry-run: detected only, nothing written"
@@ -137,7 +108,7 @@ class PresidioBackend(Backend):
         out = output_path(document, options)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(anonymized.text, encoding="utf-8")
+            out.write_text(redacted, encoding="utf-8")
         except OSError as exc:
             result.success = False
             result.message = f"could not write output: {exc}"
@@ -147,8 +118,17 @@ class PresidioBackend(Backend):
 
 
 def _analyze(analyzer, text: str, options: RedactionOptions) -> List[Entity]:
-    """Run Presidio over one segment and translate to the suite's Entity type."""
-    return [
+    """Run Presidio over one segment and translate to the suite's Entity type.
+
+    The deterministic recognizers are unioned in. Presidio is a *model*, and a
+    model misses things a regex does not: measured here with ``en_core_web_sm``,
+    Presidio returned nothing at all for ``SSN\t123-45-6789`` while the builtin
+    engine matched it. Since Presidio outranks builtin in the router, using it
+    would otherwise *lose* detections — a redaction tool must never find less
+    because you installed something better. Overlaps between the two are
+    resolved by ``opc.resolve_overlaps`` (longest span wins).
+    """
+    found = [
         Entity(
             entity_type=r.entity_type,
             score=float(r.score),
@@ -163,6 +143,8 @@ def _analyze(analyzer, text: str, options: RedactionOptions) -> List[Entity]:
             score_threshold=options.threshold,
         )
     ]
+    found.extend(detect_entities(text, options.entities, options.threshold))
+    return resolve_overlaps(found)
 
 
 # Analyzer construction is expensive (loads NLP models); cache one per process.
