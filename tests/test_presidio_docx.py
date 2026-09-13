@@ -246,3 +246,21 @@ def test_union_respects_the_entity_filter(fake_presidio):
         RedactionOptions(entities=["EMAIL_ADDRESS"]),
     )
     assert {e.entity_type for e in found} == {"EMAIL_ADDRESS"}
+
+
+class _MislabellingAnalyzer:
+    """Tags an email span as PERSON, as en_core_web_lg actually does."""
+
+    def analyze(self, text, language="en", entities=None, score_threshold=0.0):
+        i = text.index("a@b.com")
+        return [_Result("PERSON", i, i + 7, 0.99)]
+
+
+def test_deterministic_label_wins_an_exact_span_collision(fake_presidio):
+    """NER labels flip between spaCy models; a validated regex match does not."""
+    from redact.backends.presidio import _analyze
+    from redact.types import RedactionOptions
+
+    found = _analyze(_MislabellingAnalyzer(), "write to a@b.com now", RedactionOptions())
+    assert [e.entity_type for e in found] == ["EMAIL_ADDRESS"]
+    assert "PERSON" not in {e.entity_type for e in found}

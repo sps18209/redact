@@ -171,8 +171,12 @@ python -m redact list                 # module entry point equivalent
 - **Every rewrite path resolves overlapping spans** (`opc.resolve_overlaps`).
   Presidio reports one email as an EMAIL_ADDRESS *and* two URLs inside it;
   rewriting naively interleaves them into `<EMAIL_ADDRESS><URL>e@<URL>`.
-- Prefer `en_core_web_lg`. With `en_core_web_sm` Presidio tags the word "Reach"
-  as a PERSON.
+- **Deterministic labels win exact span collisions** in `_analyze`. NER labels
+  are model-dependent in both directions — `en_core_web_lg` calls
+  `maria.g@clinic.example` a PERSON while `en_core_web_sm` correctly calls it an
+  EMAIL_ADDRESS — so a bigger model is not simply better. Both redact the span;
+  pinning the label to the verified regex keeps reports and `-e` filtering
+  stable across model choices.
 - Presidio is not installed in CI. `tests/test_presidio_docx.py` injects fake
   `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
   real adapter code is exercised; the fake detects `PERSON`, a label the builtin

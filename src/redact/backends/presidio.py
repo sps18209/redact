@@ -6,8 +6,11 @@ in the router. The heavy imports happen lazily inside ``redact``/discovery so
 that merely importing this module never pulls in spaCy.
 
 Install with:  ``pip install "redact-suite[presidio]"`` then
-``python -m spacy download en_core_web_lg`` (the small ``en_core_web_sm`` model
-is noticeably weaker — measured here it tagged the word "Reach" as a PERSON).
+``python -m spacy download en_core_web_lg``. Model choice changes *labels* in
+both directions rather than being strictly better — ``en_core_web_lg`` tags
+"maria.g@clinic.example" as a PERSON where ``en_core_web_sm`` correctly says
+EMAIL_ADDRESS — which is why the deterministic recognizers below win exact span
+collisions.
 
 Presidio supplies *detection* only; the suite's own operators do the rewriting,
 so redaction modes behave identically across every backend and media type.
@@ -143,7 +146,17 @@ def _analyze(analyzer, text: str, options: RedactionOptions) -> List[Entity]:
             score_threshold=options.threshold,
         )
     ]
-    found.extend(detect_entities(text, options.entities, options.threshold))
+    deterministic = detect_entities(text, options.entities, options.threshold)
+
+    # On an *exact* span collision the deterministic label wins. A validated
+    # regex match is a fact; the model's label is a guess, and which guess you
+    # get depends on the model: measured here, en_core_web_sm calls
+    # "maria.g@clinic.example" an EMAIL_ADDRESS while en_core_web_lg calls the
+    # same span a PERSON. Both redact it, but a label that flips with the model
+    # makes reports and ``-e`` filtering unreliable.
+    exact = {(e.start, e.end) for e in deterministic}
+    found = [e for e in found if (e.start, e.end) not in exact]
+    found.extend(deterministic)
     return resolve_overlaps(found)
 
 
