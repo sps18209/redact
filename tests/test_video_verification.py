@@ -64,3 +64,42 @@ def test_sidecar_is_atomic_json_and_is_never_reingested(tmp_path):
     loaded = json.loads(sidecar.read_text())
     assert loaded["passed"] is True
     assert not list(tmp_path.glob(".*verification.json.tmp"))
+
+
+def test_unresolved_gaps_are_warnings_not_failures(tmp_path):
+    out = tmp_path / "clip.redacted.mp4"
+    make_video(out, frames=3)
+    report = verify_video_output(
+        out,
+        expected_frames=3,
+        continuity={"unresolved_gaps": [
+            {"label": "FACE", "first_frame": 40, "last_frame": 44},
+        ]},
+    )
+    assert report["passed"] is True
+    assert report["verification_status"] == "passed_with_warnings"
+    assert len(report["warnings"]) == 1
+    assert "masked->exposed->masked" in report["warnings"][0]
+    assert "40-44" in report["warnings"][0]
+
+
+def test_hard_failures_outrank_gap_warnings(tmp_path):
+    report = verify_video_output(
+        tmp_path / "missing.redacted.mp4",
+        expected_frames=1,
+        continuity={"unresolved_gaps": [
+            {"label": "FACE", "first_frame": 1, "last_frame": 1},
+        ]},
+    )
+    assert report["passed"] is False
+    assert report["verification_status"] == "failed"
+
+
+def test_report_records_source_and_backend(tmp_path):
+    out = tmp_path / "clip.redacted.mp4"
+    make_video(out, frames=1)
+    report = verify_video_output(
+        out, expected_frames=1, source=tmp_path / "clip.mp4", backend="yolo",
+    )
+    assert report["source"] == str(tmp_path / "clip.mp4")
+    assert report["backend"] == "yolo"

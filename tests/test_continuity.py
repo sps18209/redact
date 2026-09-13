@@ -87,3 +87,58 @@ def test_zero_gap_disables_synthetic_masks():
     assert first[0][1]
     assert second[0][1] == []
     assert tracker.stats()["propagated_masks"] == 0
+
+
+def test_reacquisition_beyond_the_bound_records_an_unresolved_gap():
+    tracker = TemporalMaskTracker(max_gap=2)
+    for idx, dets in enumerate([[det(0, 10)], [], [], [], [], [], [det(1, 11)]]):
+        tracker.push(idx, dets)
+    tracker.flush()
+
+    stats = tracker.stats()
+    # Propagation covered frames 1-2; frames 3-5 went out unmasked.
+    assert stats["unresolved_gaps"] == [
+        {"label": "FACE", "first_frame": 3, "last_frame": 5}
+    ]
+    assert stats["tracks_created"] == 2
+
+
+def test_reacquisition_within_the_bound_is_not_an_unresolved_gap():
+    tracker = TemporalMaskTracker(max_gap=2)
+    for idx, dets in enumerate([[det(0, 10)], [], [det(0, 10)]]):
+        tracker.push(idx, dets)
+    tracker.flush()
+    assert tracker.stats()["unresolved_gaps"] == []
+
+
+def test_gap_reporting_forgets_expired_tracks_beyond_the_window():
+    tracker = TemporalMaskTracker(max_gap=1, gap_report_window=4)
+    frames = [[det(0, 10)]] + [[] for _ in range(8)] + [[det(0, 10)]]
+    for idx, dets in enumerate(frames):
+        tracker.push(idx, dets)
+    tracker.flush()
+    # Nine frames later is beyond the window: a fresh subject, not a gap.
+    assert tracker.stats()["unresolved_gaps"] == []
+
+
+def test_gap_reporting_never_crosses_labels():
+    tracker = TemporalMaskTracker(max_gap=1)
+    frames = [[det(0, 10, label="FACE")], [], [], [],
+              [det(0, 10, label="PLATE")]]
+    for idx, dets in enumerate(frames):
+        tracker.push(idx, dets)
+    tracker.flush()
+    assert tracker.stats()["unresolved_gaps"] == []
+
+
+def test_stats_returns_an_isolated_copy():
+    tracker = TemporalMaskTracker(max_gap=1)
+    for idx, dets in enumerate([[det(0, 10)], [], [], [], [det(0, 10)]]):
+        tracker.push(idx, dets)
+    tracker.flush()
+    first = tracker.stats()
+    first["unresolved_gaps"].clear()
+    first["unresolved_gaps"].append({"label": "TAMPERED"})
+    assert tracker.stats()["unresolved_gaps"] == [
+        {"label": "FACE", "first_frame": 2, "last_frame": 3}
+    ]

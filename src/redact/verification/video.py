@@ -29,6 +29,8 @@ def verify_video_output(
     expected_frames: int,
     continuity: Optional[dict] = None,
     audio_preserved: Optional[bool] = None,
+    source: Optional[Path] = None,
+    backend: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decode ``output`` fully and return a JSON-safe verification report.
 
@@ -72,11 +74,29 @@ def verify_video_output(
         )
 
     continuity = dict(continuity or {})
+    # A gap the tracker refused to bridge is honest uncertainty, not a broken
+    # artifact: the file still decodes and every detection was masked. It must
+    # never be folded into a clean "passed", and it must never outrank a hard
+    # decode failure either — a human reviews the named frames, the batch runs on.
+    warnings = [
+        "possible masked->exposed->masked sequence: "
+        f"{gap['label']} unmasked frames {gap['first_frame']}-{gap['last_frame']}"
+        for gap in continuity.get("unresolved_gaps", [])
+    ]
+    if errors:
+        status = "failed"
+    elif warnings:
+        status = "passed_with_warnings"
+    else:
+        status = "passed"
     report: Dict[str, Any] = {
         "verification_version": 1,
+        "source": str(source) if source is not None else None,
+        "backend": backend,
         "output": str(output),
-        "verification_status": "passed" if not errors else "failed",
+        "verification_status": status,
         "passed": not errors,
+        "warnings": warnings,
         "size_bytes": size_bytes,
         "expected_frames": int(expected_frames),
         "frames_decoded": frames_decoded,

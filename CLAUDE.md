@@ -44,7 +44,9 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/backends/pdf_redact_tools.py` | Shells out to `pdf-redact-tools` CLI. |
 | `src/redact/semantic.py` | CLIP semantic search: embed images + sampled video frames, calibrated scoring, on-disk index, and `filter_documents` behind `run --match`. |
 | `src/redact/media.py` | Shared ffmpeg discovery (system, else the static `imageio-ffmpeg` build), video fps, and audio muxing. |
-| `src/redact/backends/yolo.py` | Ultralytics YOLO: open-vocabulary prompts (YOLO-World) or COCO classes; masks boxes with blur/mosaic/solid. |
+| `src/redact/backends/yolo.py` | Ultralytics YOLO: open-vocabulary prompts (YOLO-World) or COCO classes; masks boxes with blur/mosaic/solid. Video runs go through `continuity.py` and are verified via `verification/`. |
+| `src/redact/continuity.py` | `TemporalMaskTracker` — bounded temporal continuity for per-frame visual detections: IoU/centre-gate association, interpolation across healed gaps, padded propagation, and unresolved-gap (masked→exposed→masked) reporting. Dependency-free. |
+| `src/redact/verification/` | Reopen-and-verify for video outputs: full decode + frame-count check, `passed`/`passed_with_warnings`/`failed` rollup, and the `<output>.verification.json` audit sidecar. |
 | `src/redact/backends/deface.py` | deface face blurring (image/video) via its Python API. Note: `import deface` here resolves to the installed library, not this module (Python 3 absolute imports). |
 | `src/redact/backends/anonymizer.py` | understand.ai Anonymizer (image/video), legacy CLI. |
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
@@ -193,3 +195,17 @@ python -m redact list                 # module entry point equivalent
   `main` and safe to delete.)
 - Never commit redaction outputs; `.gitignore` already excludes
   `*.redacted.*` and `*-final.pdf`.
+- **Video continuity is bounded and honest.** The YOLO video path bridges
+  detector misses of up to `temporal_gap` frames (default 2) with
+  interpolated/propagated masks — false-positive biased — and *refuses* to
+  invent longer trajectories. A re-detection near a recently expired track
+  instead records an `unresolved_gaps` entry (the masked→exposed→masked
+  signature) which surfaces as a sidecar warning and
+  `verification_status: passed_with_warnings`. Do not "fix" a warning by
+  widening `max_gap` past jitter scale; a long gap is information for a
+  human, not something to mask over.
+- **Every video export is reopened and verified** (full decode, frame count)
+  before the result is called a success; a failed verification removes the
+  unusable output but keeps the sidecar as the audit record. The sidecar name
+  derives from the output (`<output>.verification.json`), so it contains
+  `.redacted.` and ingestion idempotence holds — regression-tested.

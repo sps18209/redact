@@ -186,6 +186,8 @@ class YoloBackend(Backend):
                     expected_frames=frames,
                     continuity=continuity,
                     audio_preserved=audio,
+                    source=document.path,
+                    backend=self.name,
                 )
                 try:
                     sidecar = write_verification_sidecar(out, verification)
@@ -205,11 +207,17 @@ class YoloBackend(Backend):
                     return result
 
                 note = "" if audio else "; audio not preserved"
+                gaps = verification.get("warnings", [])
+                gap_note = (
+                    f"; {len(gaps)} possible exposure gap(s) — see report"
+                    if gaps else ""
+                )
                 repairs = continuity["interpolated_masks"] + continuity["propagated_masks"]
                 result.message = (
                     f"{found} detection(s) across {frames} frame(s) masked ({strategy})"
                     f" for: {', '.join(wanted)}; verified; "
-                    f"{repairs} temporal continuity mask(s); report: {sidecar}{note}"
+                    f"{repairs} temporal continuity mask(s); report: {sidecar}"
+                    f"{gap_note}{note}"
                 )
             else:
                 result.entities = _redact_image(
