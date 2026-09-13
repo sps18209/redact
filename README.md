@@ -29,7 +29,7 @@ each document to the tool that fits.
 | **builtin** | text, structured, docx, xlsx, pptx, email | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Office documents and email in place, formatting intact. Always available. | nothing (stdlib) |
 | **presidio** | text, structured, docx, xlsx, pptx, email | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
-| **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
+| **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
 | **deface** | image, video | [deface](https://github.com/ORB-HD/deface) — CNN face blurring. Model ships in the wheel, so detection is fully offline; video needs no system ffmpeg. **Faces only.** | `pip install "redact-suite[deface]"` |
@@ -281,6 +281,20 @@ redact run msg.eml --eml-attachments strip      # replace payload with a notice
 left content unredacted (today: kept binary attachments), separately from
 `success=False` failures — because `exit 0` from a redaction tool is a promise
 automation will act on.
+
+### PDFs
+
+There is no dependency-light path that truly redacts a PDF in place, and the
+suite does not pretend otherwise:
+
+| Backend | What you actually get |
+|---|---|
+| `pdf-redact-tools` | A genuinely sanitised PDF — flattened to images, text layer and hidden metadata gone. **The only backend that redacts the PDF itself.** |
+| `redactai` | Detection over the PDF's text layer plus a redacted `.txt` *extract*. The source PDF is **not** modified, so the run is reported as leaving content unredacted and exits non-zero. |
+
+Drawing black rectangles over a PDF's text is not redaction — the characters
+stay in the content stream and any `pdftotext` recovers them. Rather than ship
+that, the suite reports honestly and points you at the backend that works.
 
 ### `run` options
 

@@ -248,6 +248,16 @@ python -m redact list                 # module entry point equivalent
 - `deface` drives the library's Python API, not its console script: `python -m
   deface` does not work (no `__main__`), and the API additionally yields per-face
   boxes, which is what populates `Entity.bbox`.
+- **`redactai` does not redact a PDF, and says so.** It has no PDF writer, so for
+  a PDF it detects in the text layer and writes a redacted `.txt` *extract*
+  while the source PDF stays untouched. It therefore appends the PDF to
+  `result.unredacted`, which makes the CLI warn and exit non-zero. It used to
+  return a bare success, so `redact run report.pdf -b redactai` exited 0 with
+  every entity still in the PDF the user holds. A `.txt` input is unaffected —
+  there the written file really is the redacted artifact. `pdf-redact-tools` is
+  the only backend that redacts a PDF itself (by flattening it to images).
+  Black rectangles drawn over text are not redaction: the characters remain in
+  the content stream. Do not add a "PDF redaction" path that only draws boxes.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

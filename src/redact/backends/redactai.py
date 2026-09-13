@@ -54,7 +54,8 @@ def _module_present(name: str) -> bool:
 
 class RedactAIBackend(Backend):
     name = "redactai"
-    description = "RedactAI-style contextual PDF redaction using local Ollama models (Llama/Qwen)."
+    description = ("RedactAI-style contextual detection via local Ollama models (Llama/Qwen). "
+                   "Redacts text; for a PDF it extracts only — the PDF is not modified.")
     supported_media_types = (MediaType.PDF, MediaType.TEXT)
     install_hint = 'pip install "redact-suite[pdf]" and run a local Ollama server'
     priority = 60
@@ -138,9 +139,9 @@ class RedactAIBackend(Backend):
             result.message = "dry-run: detected via ollama, nothing written"
             return result
 
-        # Write a redacted text sidecar. A true PDF black-out requires a PDF
-        # writer with span coordinates; we emit .redacted.txt to stay honest
-        # about what was applied.
+        # Write the redacted text. For a .txt input this *is* the redacted
+        # artifact. For a PDF it is only an extract: a true black-out needs a
+        # PDF writer with span coordinates, which this adapter does not have.
         out = output_path(document, options, suffix=".txt")
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -150,7 +151,21 @@ class RedactAIBackend(Backend):
             result.message = f"could not write output: {exc}"
             return result
         result.output_path = out
-        result.message = "text redacted (PDF text layer); see .redacted.txt"
+
+        if document.media_type is MediaType.PDF:
+            # The source PDF is untouched and still carries every entity found
+            # above. Reporting a clean success here tells any script checking
+            # the exit code that the PDF is safe to share — the precise lie a
+            # redaction tool must never tell. Declaring it unredacted makes the
+            # CLI warn and exit non-zero.
+            result.unredacted.append(document.path.name)
+            result.message = (
+                f"PDF NOT redacted — wrote a redacted text extract ({out.name}) only; "
+                "the source PDF still contains every entity listed. Use the "
+                "pdf-redact-tools backend to flatten the PDF itself"
+            )
+        else:
+            result.message = "text redacted"
         return result
 
 
