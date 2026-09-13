@@ -179,15 +179,17 @@ class BuiltinBackend(Backend):
 
     name = "builtin"
     description = "Dependency-free regex/rule engine for text & structured data (always available)."
-    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX)
+    supported_media_types = (
+        MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.XLSX,
+    )
     priority = 10  # low: a safe fallback, beaten by purpose-built tools
 
     def missing_dependencies(self) -> List[str]:
         return []  # stdlib only
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
-        if document.media_type is MediaType.DOCX:
-            return self._redact_docx(document, options)
+        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
+            return self._redact_office(document, options)
         try:
             text = document.read_text()
         except OSError as exc:
@@ -225,8 +227,8 @@ class BuiltinBackend(Backend):
         result.output_path = out
         return result
 
-    def _redact_docx(self, document: Document, options: RedactionOptions) -> RedactionResult:
-        return redact_docx_document(
+    def _redact_office(self, document: Document, options: RedactionOptions) -> RedactionResult:
+        return redact_office_document(
             self.name,
             document,
             options,
@@ -234,19 +236,24 @@ class BuiltinBackend(Backend):
         )
 
 
-def redact_docx_document(
+def redact_office_document(
     backend_name: str,
     document: Document,
     options: RedactionOptions,
     detect,
 ) -> RedactionResult:
-    """Drive a Word redaction with any detection function.
+    """Drive a Word or Excel redaction with any detection function.
 
-    Shared by every text backend that supports ``.docx`` (the builtin engine and
-    Presidio): the backend supplies ``detect``; replacement, image policy, output
-    naming and error handling are identical for all of them.
+    Shared by every text backend that supports Office documents (the builtin
+    engine and Presidio): the backend supplies ``detect``; replacement, image
+    policy, output naming and error handling are identical for all of them.
     """
-    from ..docx import AUTHOR_ENTITY, IMAGE_ENTITY, DocxError, redact_docx
+    from ..opc import AUTHOR_ENTITY, IMAGE_ENTITY, OpcError
+
+    if document.media_type is MediaType.XLSX:
+        from ..xlsx import redact_xlsx as redact_office
+    else:
+        from ..docx import redact_docx as redact_office
 
     result = RedactionResult(
         source=document.path, backend=backend_name, media_type=document.media_type,
@@ -257,7 +264,7 @@ def redact_docx_document(
     if wanted is not None and IMAGE_ENTITY not in wanted:
         policy = "keep"  # an entity filter that excludes images means leave them
     try:
-        docx = redact_docx(
+        office = redact_office(
             document.path,
             out,
             detect=detect,
@@ -266,17 +273,21 @@ def redact_docx_document(
             image_policy=policy,
             image_redactor=options.extra.get("image_redactor"),
         )
-    except (DocxError, OSError, ValueError) as exc:
+    except (OpcError, OSError, ValueError) as exc:
         result.success = False
-        result.message = f"could not redact .docx: {exc}"
+        result.message = f"could not redact .{document.media_type}: {exc}"
         return result
 
-    result.entities = docx.entities
-    result.redacted_text = docx.redacted_text
-    notes = list(docx.notes)
+    result.entities = office.entities
+    result.redacted_text = office.redacted_text
+    notes = list(office.notes)
     if options.dry_run:
         notes.insert(0, "dry-run: detected only, nothing written")
     else:
         result.output_path = out
     result.message = "; ".join(notes)
     return result
+
+
+#: Backwards-compatible alias for the pre-xlsx name.
+redact_docx_document = redact_office_document

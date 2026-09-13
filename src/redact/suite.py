@@ -76,12 +76,13 @@ class RedactionSuite:
     def _prepare(self, options: RedactionOptions, document: Document) -> RedactionOptions:
         """Attach an image redactor when a document's images must be blurred.
 
-        Blurring images embedded in a .docx needs an image-capable backend
+        Blurring images embedded in a .docx/.xlsx needs an image-capable backend
         (Anonymizer). Rather than give text backends registry access, the suite
         injects a callable; ``docx.redact_docx`` strips any image the callable
         declines, so the policy degrades safely when no such backend exists.
         """
-        if document.media_type is not MediaType.DOCX or options.docx_images != "blur":
+        office = (MediaType.DOCX, MediaType.XLSX)
+        if document.media_type not in office or options.docx_images != "blur":
             return options
         if options.extra.get("image_redactor") is not None:
             return options

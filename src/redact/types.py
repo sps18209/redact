@@ -23,6 +23,7 @@ class MediaType(str, enum.Enum):
     TEXT = "text"           # plain text, .txt, .md, source code
     STRUCTURED = "structured"  # csv, json, tsv, log, xml, yaml
     DOCX = "docx"          # Word documents (zip of XML parts)
+    XLSX = "xlsx"          # Excel workbooks (same OPC zip family)
     PDF = "pdf"
     IMAGE = "image"
     VIDEO = "video"

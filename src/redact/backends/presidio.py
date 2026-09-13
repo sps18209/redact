@@ -23,7 +23,7 @@ from ..types import (
     RedactionResult,
 )
 from .base import Backend
-from .builtin import redact_docx_document
+from .builtin import redact_office_document
 
 
 def _module_present(name: str) -> bool:
@@ -36,7 +36,9 @@ def _module_present(name: str) -> bool:
 class PresidioBackend(Backend):
     name = "presidio"
     description = "Microsoft Presidio — NLP + rules PII detection/anonymization for text (MIT)."
-    supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX)
+    supported_media_types = (
+        MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.XLSX,
+    )
     priority = 80  # beats the builtin engine when installed
 
     # Map the suite's neutral modes onto Presidio anonymizer operators.
@@ -66,13 +68,13 @@ class PresidioBackend(Backend):
 
         from presidio_analyzer import AnalyzerEngine  # lazy, heavy
 
-        if document.media_type is MediaType.DOCX:
+        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
             # Word rewriting needs a replacement *per entity* (each lands in the
             # run where it starts), so Presidio supplies detection and the
             # suite's own operators do the rewriting — modes stay identical
             # across backends.
             analyzer = _get_analyzer(AnalyzerEngine)
-            return redact_docx_document(
+            return redact_office_document(
                 self.name, document, options,
                 detect=lambda text: _analyze(analyzer, text, options),
             )

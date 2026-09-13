@@ -35,6 +35,8 @@ CLI, and every adapter are decoupled from any specific tool.
 |---|---|
 | `src/redact/types.py` | Core dataclasses/enums: `MediaType`, `RedactionMode`, `Entity`, `RedactionOptions`, `RedactionResult`. Dependency-free — the shared vocabulary. |
 | `src/redact/document.py` | Ingestion: `MediaType` detection, `load_document`, `iter_documents` (files/dirs/globs), and **`output_path`** — the one rule for where artifacts go. |
+| `src/redact/opc.py` | Shared Office Open XML plumbing for `.docx`/`.xlsx`: namespace-safe parse/serialize, split-run rewriting, image policy, rels retargeting, package writing. |
+| `src/redact/xlsx.py` | Excel: shared strings (deduped, located by cell), rich-text runs, cached formula results, comments, headers/footers, drawings. |
 | `src/redact/docx.py` | Stdlib `.docx` support: paragraph-level detection mapped back onto `<w:t>` runs; also tracked deletions, field codes, revision/comment authors, docProps, `.rels` hyperlink targets and embedded images. Word-safe XML round-trip. |
 | `src/redact/backends/base.py` | `Backend` ABC — the adapter contract. |
 | `src/redact/backends/builtin.py` | Offline regex/rule engine. Also exports reusable `detect_entities` / `apply_redactions`. Always available. |
@@ -60,8 +62,8 @@ CLI, and every adapter are decoupled from any specific tool.
 
 | Name | Media types | Priority | Requires |
 |---|---|---|---|
-| `builtin` | text, structured, docx | 10 | nothing (stdlib) |
-| `presidio` | text, structured, docx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
+| `builtin` | text, structured, docx, xlsx | 10 | nothing (stdlib) |
+| `presidio` | text, structured, docx, xlsx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
 | `yolo` | image, video | 65 | `ultralytics` + `opencv-python`. Open-vocabulary (YOLO-World) by default, so classes are text prompts — **the only working license-plate path**. Below deface on purpose: deface is the better *face* detector, so `auto` keeps it. |
@@ -120,10 +122,19 @@ python -m redact list                 # module entry point equivalent
 - `Document.root` is set by `iter_documents` (the directory walked, or a glob's
   wildcard-free prefix) and is `None` for a directly loaded file. Preserve it
   when constructing documents in new code paths.
-- **`.docx` goes through `docx.redact_docx`** with `detect`/`replace` callbacks,
-  driven by `builtin.redact_docx_document` — the shared entry point both the
-  builtin engine and Presidio use. A new text backend gets Word support by
-  calling it with its own `detect`; never reimplement the orchestration.
+- **Office formats go through `builtin.redact_office_document`** — the shared
+  entry point both the builtin engine and Presidio use, dispatching to
+  `docx.redact_docx` or `xlsx.redact_xlsx` with `detect`/`replace` callbacks. A
+  new text backend gets Word *and* Excel support by calling it with its own
+  `detect`; never reimplement the orchestration. (`redact_docx_document` remains
+  as an alias.)
+- **Format-agnostic OPC logic lives in `opc.py`**, not in `docx.py`/`xlsx.py`:
+  parse/serialize, `rewrite_pieces` (split runs), image policy, rels, package
+  writing. Put anything both formats need there.
+- **Excel-specific hazards** (see `xlsx.py`): text is deduplicated into
+  `sharedStrings.xml` so one edit covers many cells — findings are located by
+  walking sheets; and a cached formula result must have its *formula removed*,
+  because rewriting only `<v>` is undone the moment Excel recalculates.
 - **`docx.py` serialization is fragile by nature.** Keep the root-tag
   preservation *and* the default-namespace registration in `_parse`: ElementTree
   drops unused `xmlns:` declarations (Word then rejects the file over

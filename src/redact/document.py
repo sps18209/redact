@@ -34,6 +34,10 @@ _EXTENSION_MAP = {
     ".log": MediaType.STRUCTURED,
     # office
     ".docx": MediaType.DOCX,
+    ".xlsx": MediaType.XLSX,
+    # .xlsm is the same package with a macro payload; the macro itself is
+    # copied untouched (documented limit in xlsx.py).
+    ".xlsm": MediaType.XLSX,
     # pdf
     ".pdf": MediaType.PDF,
     # images
@@ -120,6 +124,8 @@ def _sniff_zip(path: Path) -> MediaType:
         return MediaType.UNKNOWN
     if "word/document.xml" in names:
         return MediaType.DOCX
+    if "xl/workbook.xml" in names:
+        return MediaType.XLSX
     return MediaType.UNKNOWN
 
 

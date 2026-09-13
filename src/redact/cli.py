@@ -78,8 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument(
         "--docx-images", default="keep", choices=["keep", "strip", "blur"],
-        help="images embedded in a .docx: keep them (default), strip them to a "
-        "blank placeholder, or blur faces/plates with an image backend",
+        help="images embedded in a .docx/.xlsx: keep them (default), strip them "
+        "to a blank placeholder, or blur faces with an image backend",
     )
     p_run.add_argument(
         "--dry-run", action="store_true",

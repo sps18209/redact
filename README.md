@@ -1,7 +1,7 @@
 # redact-suite
 
 A unified **PII/PHI redaction suite**. Point it at *any* document — text, CSV/JSON,
-Word (.docx), PDF, image, or video — and it routes each file to the best available redaction
+Word (.docx), Excel (.xlsx), PDF, image, or video — and it routes each file to the best available redaction
 tool, or one you pick by hand. A dependency-free rule engine ships built in, so
 the suite works out of the box and every heavy tool is opt-in.
 
@@ -26,8 +26,8 @@ each document to the tool that fits.
 
 | Backend | Handles | What it does | Requires |
 |---|---|---|---|
-| **builtin** | text, structured, docx | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Word documents in place, formatting intact. Always available. | nothing (stdlib) |
-| **presidio** | text, structured, docx | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
+| **builtin** | text, structured, docx, xlsx | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Word documents in place, formatting intact. Always available. | nothing (stdlib) |
+| **presidio** | text, structured, docx, xlsx | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
@@ -200,6 +200,22 @@ data behind — and the result message reports the real split, e.g.
 Stdlib only — no `python-docx` needed. Both the builtin engine and Presidio can
 drive Word redaction; with Presidio installed it wins on priority and you get
 name/location detection inside `.docx` too.
+
+### Spreadsheets
+
+`.xlsx`/`.xlsm` workbooks are redacted in place, and Excel's storage model has
+traps a naive find-and-replace misses:
+
+| Trap | What the suite does |
+|---|---|
+| Text is **deduplicated** into `sharedStrings.xml` | Redacting once fixes every referencing cell; the report names them (`US_SSN at People!A2, Notes!C7`) |
+| Formatted cells **split runs** (`jane` + `.doe@exa` + `mple.com`) | Detection runs on the joined string, same engine as Word |
+| Formula results are **cached** in `<v>` | Rewriting the cache alone is undone by recalculation, so the *formula is removed* and the cell becomes a static redacted string |
+| Comments, headers/footers, hyperlink `display`, text boxes, `docProps` | All scanned; comment authors scrubbed |
+
+Numeric cells are deliberately **not** scanned — an SSN stored as the number
+`123456789` is indistinguishable from any other identifier without column
+context, and guessing there would do more harm than good.
 
 ### `run` options
 
