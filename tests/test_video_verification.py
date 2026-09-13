@@ -103,3 +103,16 @@ def test_report_records_source_and_backend(tmp_path):
     )
     assert report["source"] == str(tmp_path / "clip.mp4")
     assert report["backend"] == "yolo"
+
+
+def test_malformed_continuity_degrades_to_warnings_never_raises(tmp_path):
+    out = tmp_path / "clip.redacted.mp4"
+    make_video(out, frames=1)
+    for bad in ("oops", None, {"unresolved_gaps": "oops"},
+                {"unresolved_gaps": None},
+                {"unresolved_gaps": [{"first_frame": 1}]},
+                {"unresolved_gaps": ["not-a-dict"]}):
+        report = verify_video_output(out, expected_frames=1, continuity=bad)
+        assert report["passed"] is True  # the artifact itself is fine
+    assert report["verification_status"] == "passed_with_warnings"
+    assert any("malformed" in w for w in report["warnings"])

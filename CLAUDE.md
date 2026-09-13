@@ -202,10 +202,15 @@ python -m redact list                 # module entry point equivalent
   instead records an `unresolved_gaps` entry (the masked→exposed→masked
   signature) which surfaces as a sidecar warning and
   `verification_status: passed_with_warnings`. Do not "fix" a warning by
-  widening `max_gap` past jitter scale; a long gap is information for a
-  human, not something to mask over.
-- **Every video export is reopened and verified** (full decode, frame count)
-  before the result is called a success; a failed verification removes the
-  unusable output but keeps the sidecar as the audit record. The sidecar name
+  widening `temporal_gap` past jitter scale (the backend clamps it to 0–10
+  anyway); a long gap is information for a human, not something to mask over.
+  Known limit: a gap only becomes visible when the re-detection *starts a new
+  track* — one stolen by association to another live same-label track goes
+  unreported.
+- **Every YOLO video export is reopened and verified** (full decode, frame
+  count) before the result is called a success — the other video backends
+  (deface, anonymizer) do not verify yet; wire a new video path through
+  `verification/` rather than duplicating it. A failed verification removes
+  the unusable output but keeps the sidecar as the audit record. The sidecar name
   derives from the output (`<output>.verification.json`), so it contains
   `.redacted.` and ingestion idempotence holds — regression-tested.

@@ -73,16 +73,33 @@ def verify_video_output(
             f"frame count mismatch: decoded {frames_decoded}, expected {int(expected_frames)}"
         )
 
+    malformed_continuity = None
+    if continuity is not None and not isinstance(continuity, dict):
+        malformed_continuity = continuity
+        continuity = None
     continuity = dict(continuity or {})
     # A gap the tracker refused to bridge is honest uncertainty, not a broken
     # artifact: the file still decodes and every detection was masked. It must
     # never be folded into a clean "passed", and it must never outrank a hard
-    # decode failure either — a human reviews the named frames, the batch runs on.
-    warnings = [
-        "possible masked->exposed->masked sequence: "
-        f"{gap['label']} unmasked frames {gap['first_frame']}-{gap['last_frame']}"
-        for gap in continuity.get("unresolved_gaps", [])
-    ]
+    # decode failure either — a human reviews the named frames, the batch runs
+    # on. A malformed gap record from a caller degrades to a warning too: this
+    # function's contract is that it never raises.
+    warnings = []
+    if malformed_continuity is not None:
+        warnings.append(f"malformed continuity record: {malformed_continuity!r}")
+    raw_gaps = continuity.get("unresolved_gaps") or []
+    if not isinstance(raw_gaps, (list, tuple)):
+        warnings.append(f"malformed continuity unresolved_gaps: {raw_gaps!r}")
+        raw_gaps = []
+    for gap in raw_gaps:
+        if isinstance(gap, dict):
+            warnings.append(
+                "possible masked->exposed->masked sequence: "
+                f"{gap.get('label', '?')} unmasked frames "
+                f"{gap.get('first_frame', '?')}-{gap.get('last_frame', '?')}"
+            )
+        else:
+            warnings.append(f"malformed continuity gap record: {gap!r}")
     if errors:
         status = "failed"
     elif warnings:

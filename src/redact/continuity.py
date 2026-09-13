@@ -14,10 +14,13 @@ The design is deliberately bounded:
 * provisional masks are padded and biased toward hiding too much, not too little;
 * if a track is reacquired before emission, the provisional masks are replaced
   with linear interpolation between the two real detections;
-* a gap the bound refuses to bridge is *reported*, never hidden: when a new
-  detection appears near a recently expired same-label track, the frames that
-  went out unmasked in between are recorded as an unresolved gap — the
-  masked -> exposed -> masked signature a verification report must surface.
+* a gap the bound refuses to bridge is *reported* rather than hidden: when a
+  new detection starts a track near a recently expired same-label one, the
+  frames that went out unmasked in between are recorded as an unresolved gap —
+  the masked -> exposed -> masked signature a verification report must
+  surface. (Only gaps that end in a re-detection are visible this way; a
+  subject never re-detected, or one whose re-detection is associated to a
+  different live track, leaves no record.)
 
 No pixels and no model-specific objects live here. The module is dependency-free
 and works only with neutral detection tuples:
@@ -190,12 +193,13 @@ class TemporalMaskTracker:
         return report
 
     def _note_exposure(self, det: Detection, frame_index: int) -> None:
-        """A new track starting near a recently expired same-label one means the
-        frames in between went out unmasked. Propagation covered the first
-        ``max_gap`` frames after the last real detection; everything from there
-        to the frame before this re-detection was exposed. Record it — a subject
-        may simply have left and returned, so this is a warning for the audit
-        record, never a silent drop and never a reason to invent a trajectory."""
+        """Record the exposed frame span behind a re-detection of an expired track.
+
+        Propagation covered the first ``max_gap`` frames after the last real
+        detection; everything from there to the frame before this re-detection
+        went out unmasked. A subject may simply have left and returned, so this
+        is a warning for the audit record, never a reason to invent a
+        trajectory."""
         best_index: Optional[int] = None
         best_score = float("-inf")
         for index, (label, box, last_frame) in enumerate(self._recently_expired):
