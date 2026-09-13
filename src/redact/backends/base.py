@@ -33,6 +33,10 @@ class Backend(abc.ABC):
     #: Media types this backend can process.
     supported_media_types: Sequence[MediaType] = ()
 
+    #: How to make this backend available, shown by ``redact list`` when it is
+    #: not. A user who sees "needs: pypdf" should not have to guess the command.
+    install_hint: str = ""
+
     #: Router priority when several backends can handle a document. Higher wins.
     #: Purpose-built tools should outrank general fallbacks.
     priority: int = 0

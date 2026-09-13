@@ -183,10 +183,28 @@ def load_document(path) -> Document:
     return Document(path=p, media_type=detect_media_type(p))
 
 
+def unmatched_inputs(inputs: Iterable[str], recursive: bool = True) -> List[str]:
+    """Inputs that name no existing file — a typo, not an empty folder.
+
+    Without this, ``redact run typo.txt`` and ``redact run empty_dir/`` both
+    report "no matching documents found", which sends the user looking for the
+    wrong problem.
+    """
+    missing = []
+    for raw in inputs:
+        p = Path(raw)
+        if p.is_dir() or p.is_file():
+            continue
+        if not _glob.glob(raw, recursive=recursive):
+            missing.append(raw)
+    return missing
+
+
 def iter_documents(
     inputs: Iterable[str],
     recursive: bool = True,
     include_unknown: bool = False,
+    skipped: Optional[List[Path]] = None,
 ) -> Iterator[Document]:
     """Yield :class:`Document` objects for every input.
 
@@ -195,8 +213,9 @@ def iter_documents(
     a folder and it surfaces every redactable file it can identify.
 
     Files whose type resolves to :data:`MediaType.UNKNOWN` are skipped unless
-    ``include_unknown`` is set. The suite's own outputs (see
-    :func:`is_redaction_output`) are always skipped.
+    ``include_unknown`` is set; pass a list as ``skipped`` to find out which, so
+    a caller can tell the user rather than silently ignoring them. The suite's
+    own outputs (see :func:`is_redaction_output`) are always skipped.
     """
     for raw in inputs:
         root, paths = _expand_input(raw, recursive)
@@ -205,6 +224,8 @@ def iter_documents(
                 continue
             mt = detect_media_type(path)
             if mt is MediaType.UNKNOWN and not include_unknown:
+                if skipped is not None:
+                    skipped.append(path)
                 continue
             yield Document(path=path, media_type=mt, root=root)
 

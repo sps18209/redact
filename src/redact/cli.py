@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from .document import iter_documents
+from .document import iter_documents, unmatched_inputs
 from .suite import RedactionSuite
 from .types import RedactionMode, RedactionOptions
 
@@ -145,15 +145,37 @@ def _cmd_list(suite: RedactionSuite) -> int:
         media = ",".join(r["media_types"])
         print(f"{r['name']:<18} {avail:<6} {r['priority']:<5} {media:<28} {r['description']}")
         if not r["available"] and r["missing"]:
-            print(f"{'':<18} └─ needs: {', '.join(r['missing'])}")
+            print(f"{'':<18} ├─ needs: {', '.join(r['missing'])}")
+            if r.get("install_hint"):
+                print(f"{'':<18} └─ {r['install_hint']}")
     return 0
 
 
+def _report_inputs(inputs: List[str], recursive: bool) -> None:
+    """Name inputs that match nothing, so a typo does not look like an empty run."""
+    for raw in unmatched_inputs(inputs, recursive):
+        print(f"no such file, directory, or glob match: {raw}", file=sys.stderr)
+
+
+def _report_skipped(skipped: List, include_unknown: bool) -> None:
+    if skipped and not include_unknown:
+        names = ", ".join(p.name for p in skipped[:3])
+        more = f" (+{len(skipped) - 3} more)" if len(skipped) > 3 else ""
+        print(
+            f"skipped {len(skipped)} file(s) of unrecognised type: {names}{more}"
+            " — pass --include-unknown to attempt them",
+            file=sys.stderr,
+        )
+
+
 def _cmd_detect(inputs: List[str], recursive: bool, include_unknown: bool) -> int:
+    _report_inputs(inputs, recursive)
+    skipped: List = []
     any_found = False
-    for doc in iter_documents(inputs, recursive, include_unknown):
+    for doc in iter_documents(inputs, recursive, include_unknown, skipped=skipped):
         any_found = True
         print(f"{doc.media_type:<12} {doc.path}")
+    _report_skipped(skipped, include_unknown)
     if not any_found:
         print("no matching documents found", file=sys.stderr)
         return 1
@@ -197,8 +219,10 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
     )
 
+    _report_inputs(args.inputs, not args.no_recursive)
+    skipped: List = []
     documents = iter_documents(
-        args.inputs, not args.no_recursive, args.include_unknown
+        args.inputs, not args.no_recursive, args.include_unknown, skipped=skipped
     )
     if getattr(args, "match", None):
         from .semantic import SemanticError, filter_documents
@@ -221,6 +245,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
             failures += 1
         print(result.summary())
 
+    _report_skipped(skipped, args.include_unknown)
     if total == 0:
         print("no matching documents found", file=sys.stderr)
         return 1
@@ -236,6 +261,7 @@ def _cmd_search(args: argparse.Namespace) -> int:
         if args.index and Path(args.index).is_file():
             index = SemanticIndex.load(args.index)
         else:
+            _report_inputs(args.inputs, not args.no_recursive)
             docs = iter_documents(args.inputs, not args.no_recursive)
             index = SemanticIndex.build(docs, embedder, frames_per_video=args.frames)
             if args.index:

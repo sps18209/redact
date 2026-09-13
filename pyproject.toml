@@ -25,7 +25,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-presidio = ["presidio-analyzer", "presidio-anonymizer"]
+# presidio-anonymizer is intentionally absent: the suite uses Presidio for
+# detection only and does its own rewriting, so requiring it would be a lie.
+presidio = ["presidio-analyzer"]
 pdf = ["pypdf>=3.0"]
 # Face blurring for images/video: ships its own ONNX model and a static ffmpeg.
 deface = ["deface>=1.5"]
@@ -40,7 +42,20 @@ semantic = ["torch", "clip @ git+https://github.com/openai/CLIP.git", "pillow", 
 # verification instead of silently skipping the new privacy-safety gate.
 dev = ["pytest>=7", "numpy", "imageio", "imageio-ffmpeg"]
 # convenience meta-extra
-all = ["presidio-analyzer", "presidio-anonymizer", "pypdf>=3.0", "deface>=1.5"]
+# Every pip-installable backend. Kept in sync with the extras above — the
+# README promises this installs all of them, so omissions are a broken promise.
+all = [
+    "presidio-analyzer",
+    "pypdf>=3.0",
+    "deface>=1.5",
+    "ultralytics>=8.3",
+    "opencv-python",
+    "imageio",
+    "imageio-ffmpeg",
+    "torch",
+    "clip @ git+https://github.com/openai/CLIP.git",
+    "pillow",
+]
 
 [project.scripts]
 redact = "redact.cli:main"

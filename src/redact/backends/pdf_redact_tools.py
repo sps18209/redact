@@ -28,6 +28,7 @@ class PdfRedactToolsBackend(Backend):
     name = "pdf-redact-tools"
     description = "pdf-redact-tools — strips PDF text layer & metadata by flattening to images."
     supported_media_types = (MediaType.PDF,)
+    install_hint = "install pdf-redact-tools (https://github.com/firstlookmedia/pdf-redact-tools)"
     priority = 40
 
     def missing_dependencies(self) -> List[str]:

@@ -60,6 +60,7 @@ class DefaceBackend(Backend):
     name = "deface"
     description = "deface — offline CNN face blurring for images & video (bundled model; faces only, not plates)."
     supported_media_types = (MediaType.IMAGE, MediaType.VIDEO)
+    install_hint = 'pip install "redact-suite[deface]"'
     priority = 70  # above anonymizer: this one actually installs
 
     #: Suite mode -> deface's ``replacewith`` strategy.

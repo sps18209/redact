@@ -150,7 +150,9 @@ python -m redact list                 # module entry point equivalent
 ## Adding a new backend
 
 1. Subclass `redact.backends.base.Backend`; set `name`, `description`,
-   `supported_media_types`, `priority`.
+   `supported_media_types`, `priority`, and — unless it is always available —
+   `install_hint`, the exact command that makes it work. `redact list` prints it
+   under the "needs:" line; a test asserts every optional backend has one.
 2. Implement `missing_dependencies()` (cheap, no raise) and `redact()`.
 3. Add it to `DEFAULT_BACKENDS` in `src/redact/backends/__init__.py`.
 4. Add tests mirroring `tests/test_backends_availability.py` patterns.
@@ -230,6 +232,12 @@ python -m redact list                 # module entry point equivalent
   `main` and safe to delete.)
 - Never commit redaction outputs; `.gitignore` already excludes
   `*.redacted.*` and `*-final.pdf`.
+- **The `[all]` extra must list every pip-installable backend.** The README
+  promises it does, and a test in `test_backends_availability.py` enforces it —
+  it was silently missing `yolo` and `semantic`.
+- **Silence is a bug in a CLI.** A mistyped path must not read like an empty
+  folder (`unmatched_inputs`), and files skipped as unrecognised are reported
+  with a pointer to `--include-unknown` rather than vanishing.
 - **Video continuity is bounded and honest.** The YOLO video path bridges
   detector misses of up to `temporal_gap` frames (default 2) with
   interpolated/propagated masks — false-positive biased — and *refuses* to

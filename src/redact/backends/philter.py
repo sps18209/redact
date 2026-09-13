@@ -29,6 +29,7 @@ class PhilterBackend(Backend):
     name = "philter"
     description = "Philter — self-hosted PII/PHI redaction service for healthcare/legal/finance (Apache-2.0)."
     supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED)
+    install_hint = "run a Philter service and set PHILTER_ENDPOINT (https://philterd.ai/)"
     priority = 70
 
     def _endpoint(self, options: RedactionOptions = None) -> str:

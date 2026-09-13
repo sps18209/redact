@@ -132,6 +132,7 @@ class RedactionSuite:
                     "media_types": [str(m) for m in backend.supported_media_types],
                     "priority": backend.priority,
                     "description": backend.description,
+                    "install_hint": backend.install_hint,
                 }
             )
         return sorted(rows, key=lambda r: (not r["available"], -r["priority"], r["name"]))

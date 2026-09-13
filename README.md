@@ -41,9 +41,23 @@ can run right now and exactly what each missing one needs.
 ## Install
 
 ```bash
-pip install -e .                 # core suite (builtin backend only)
-pip install -e ".[presidio]"     # add Presidio
-pip install -e ".[all]"          # add every pip-installable backend
+pip install -e .                 # core suite (builtin backend only, zero deps)
+pip install -e ".[presidio]"     # add Presidio       (names, locations)
+pip install -e ".[deface]"       # add deface         (faces in images/video)
+pip install -e ".[yolo]"         # add YOLO           (plates, prompt-driven)
+pip install -e ".[semantic]"     # add CLIP search
+pip install -e ".[all]"          # every pip-installable backend
+```
+
+Not sure what you have? `redact list` shows every backend, whether it can run
+right now, what it is missing, and the exact command to fix it:
+
+```
+BACKEND            AVAIL  PRIO  MEDIA TYPES         DESCRIPTION
+builtin            yes    10    text,structured,…   Dependency-free regex/rule engine…
+redactai           no     60    pdf,text            RedactAI-style contextual PDF redaction…
+                   ├─ needs: pypdf, ollama server at http://localhost:11434 (unreachable)
+                   └─ pip install "redact-suite[pdf]" and run a local Ollama server
 ```
 
 ### Faces and license plates

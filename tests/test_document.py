@@ -60,3 +60,23 @@ def test_iter_documents_non_recursive(tmp_path):
     (sub / "c.txt").write_text("deep")
     docs = list(iter_documents([str(tmp_path)], recursive=False))
     assert {d.name for d in docs} == {"a.txt"}
+
+
+def test_unmatched_inputs_distinguishes_typos_from_empty_dirs(tmp_path):
+    from redact.document import unmatched_inputs
+
+    (tmp_path / "real.txt").write_text("x")
+    (tmp_path / "emptydir").mkdir()
+    missing = unmatched_inputs(
+        [str(tmp_path / "real.txt"), str(tmp_path / "emptydir"), str(tmp_path / "nope.txt")]
+    )
+    assert missing == [str(tmp_path / "nope.txt")]
+
+
+def test_skipped_files_are_reported_to_the_caller(tmp_path):
+    (tmp_path / "a.txt").write_text("hi")
+    (tmp_path / "b.bin").write_bytes(b"\x00\x01\x02")
+    skipped = []
+    docs = list(iter_documents([str(tmp_path)], skipped=skipped))
+    assert [d.name for d in docs] == ["a.txt"]
+    assert [p.name for p in skipped] == ["b.bin"]

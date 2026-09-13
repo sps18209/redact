@@ -153,6 +153,10 @@ class AnonymizerBackend(Backend):
         "Python<=3.6; prefer 'deface' for faces)."
     )
     supported_media_types = (MediaType.IMAGE, MediaType.VIDEO)
+    install_hint = (
+        "legacy: needs Python<=3.6 for tensorflow-gpu==1.11.0; "
+        "prefer the 'yolo' backend for plates and 'deface' for faces"
+    )
     priority = 60  # below deface: this upstream no longer installs anywhere modern
 
     def missing_dependencies(self) -> List[str]:

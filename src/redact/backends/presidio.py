@@ -47,6 +47,9 @@ class PresidioBackend(Backend):
     supported_media_types = (
         MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.XLSX,
     )
+    install_hint = (
+        'pip install "redact-suite[presidio]" && python -m spacy download en_core_web_lg'
+    )
     priority = 80  # beats the builtin engine when installed
 
     # Map the suite's neutral modes onto Presidio anonymizer operators.

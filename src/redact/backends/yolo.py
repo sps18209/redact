@@ -94,6 +94,7 @@ class YoloBackend(Backend):
     # Below deface (70) on purpose: deface is a purpose-built face detector and
     # is better at faces, so `auto` should not silently swap it for a
     # generalist. Select this backend explicitly when you need plates.
+    install_hint = 'pip install "redact-suite[yolo]"'
     priority = 65
 
     def missing_dependencies(self) -> List[str]:

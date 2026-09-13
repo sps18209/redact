@@ -40,3 +40,30 @@ def test_backend_failure_is_result_not_exception(tmp_path):
         res = backend.redact(doc, RedactionOptions())
         assert res.success is False
         assert "missing" in res.message.lower()
+
+
+def test_every_optional_backend_explains_how_to_install_it():
+    """A backend that can be unavailable must tell the user what to do."""
+    from redact.backends.builtin import BuiltinBackend
+
+    for cls in DEFAULT_BACKENDS:
+        backend = cls()
+        if isinstance(backend, BuiltinBackend):
+            continue  # always available; nothing to install
+        assert backend.install_hint, f"{backend.name} has no install_hint"
+
+
+def test_all_extra_covers_every_pip_installable_backend():
+    """README promises [all] installs them; an omission is a broken promise."""
+    import re
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    text = pyproject.read_text()
+    optional = re.search(r"\[project\.optional-dependencies\](.*?)\n\[", text, re.S).group(1)
+    extras = dict(re.findall(r"^(\w+) = \[(.*?)\]", optional, re.S | re.M))
+    all_pkgs = extras["all"]
+    for name in ("presidio", "pdf", "deface", "yolo", "semantic"):
+        for pkg in re.findall(r'"([^"]+)"', extras[name]):
+            root = pkg.split()[0].split(">=")[0].split("==")[0]
+            assert root in all_pkgs, f"[all] is missing {root} (from [{name}])"
