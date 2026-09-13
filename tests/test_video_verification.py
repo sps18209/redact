@@ -116,3 +116,14 @@ def test_malformed_continuity_degrades_to_warnings_never_raises(tmp_path):
         assert report["passed"] is True  # the artifact itself is fine
     assert report["verification_status"] == "passed_with_warnings"
     assert any("malformed" in w for w in report["warnings"])
+
+
+def test_report_distinguishes_gap_reporting_from_no_tracker(tmp_path):
+    """A caller without a tracker must not read as 'gap reporting ran clean'."""
+    out = tmp_path / "clip.redacted.mp4"
+    make_video(out, frames=1)
+    with_tracker = verify_video_output(
+        out, expected_frames=1, continuity={"unresolved_gaps": []})
+    without = verify_video_output(out, expected_frames=1, continuity={})
+    assert with_tracker["gap_reporting"] is True
+    assert without["gap_reporting"] is False

@@ -9,6 +9,13 @@ The sidecar is intentionally named from the already-redacted output, e.g.
 ``clip.redacted.mp4.verification.json``. That name contains ``.redacted.`` and
 therefore satisfies the suite's ingestion-idempotence rule: a later recursive
 batch will not ingest its own verification artifact.
+
+The sidecar is an INTERNAL audit record — never deliver it alongside the
+redacted artifact. It names the source path (revealing the location of the
+unredacted original) and, when gap warnings are present, the exact frame
+ranges where a subject may be exposed: a frame-precise map for an adversarial
+recipient. Review it, act on it, keep it with the case file — not in the
+production set.
 """
 
 from __future__ import annotations
@@ -113,6 +120,9 @@ def verify_video_output(
         "output": str(output),
         "verification_status": status,
         "passed": not errors,
+        # A caller with no tracker produces no gap records at all; that must
+        # never read the same as "gap reporting ran and found nothing".
+        "gap_reporting": "unresolved_gaps" in continuity,
         "warnings": warnings,
         "size_bytes": size_bytes,
         "expected_frames": int(expected_frames),

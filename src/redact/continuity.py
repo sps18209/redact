@@ -18,9 +18,17 @@ The design is deliberately bounded:
   new detection starts a track near a recently expired same-label one, the
   frames that went out unmasked in between are recorded as an unresolved gap —
   the masked -> exposed -> masked signature a verification report must
-  surface. (Only gaps that end in a re-detection are visible this way; a
-  subject never re-detected, or one whose re-detection is associated to a
-  different live track, leaves no record.)
+  surface.
+
+Gap reporting sees exactly one signature and nothing else. A clean report
+means "no detected masked -> exposed -> masked sequence", **not** "no
+exposure". Structurally invisible: a subject never re-detected at all; a
+re-detection more than ``gap_report_window`` frames after expiry (the window
+is frame-based, so it shrinks in wall-clock terms at higher fps); a
+re-detection associated to a *different* live same-label track; and a
+re-detection under a different label. The frames propagation covered are
+counted as masked, but those masks are predictions — a fast subject can
+outrun them.
 
 No pixels and no model-specific objects live here. The module is dependency-free
 and works only with neutral detection tuples:

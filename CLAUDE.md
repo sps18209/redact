@@ -204,9 +204,14 @@ python -m redact list                 # module entry point equivalent
   `verification_status: passed_with_warnings`. Do not "fix" a warning by
   widening `temporal_gap` past jitter scale (the backend clamps it to 0–10
   anyway); a long gap is information for a human, not something to mask over.
-  Known limit: a gap only becomes visible when the re-detection *starts a new
-  track* — one stolen by association to another live same-label track goes
-  unreported.
+  Known limits — a clean report means "no *detected* exposure signature",
+  never "no exposure": invisible are a subject never re-detected, a
+  re-detection beyond `gap_report_window` frames (frame-based, default 30,
+  tunable via `extra`), one stolen by association to another live same-label
+  track, and one re-detected under a different label.
+- **The verification sidecar is an internal audit record — never deliver it
+  with the redacted artifact.** It names the source path and, when warnings
+  are present, the exact frames where a subject may be exposed.
 - **Every YOLO video export is reopened and verified** (full decode, frame
   count) before the result is called a success — the other video backends
   (deface, anonymizer) do not verify yet; wire a new video path through

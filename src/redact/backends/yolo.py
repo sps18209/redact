@@ -129,6 +129,20 @@ class YoloBackend(Backend):
         # Keep the escape hatch bounded. Zero explicitly disables propagation.
         return max(0, min(10, gap))
 
+    def _gap_report_window(self, options: RedactionOptions) -> int:
+        """How many FRAMES an expired track stays matchable for gap reporting.
+
+        Frame-based, not time-based: 30 frames is one second at 30 fps but
+        half that at 60 fps. Operators processing high-fps footage should
+        widen it (``gap_report_window`` in ``extra``) — widening only adds
+        warnings, never masks, so the bound is generous."""
+        raw = options.extra.get("gap_report_window", 30)
+        try:
+            window = int(raw)
+        except (TypeError, ValueError):
+            window = 30
+        return max(0, min(600, window))
+
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
         result = RedactionResult(
             source=document.path, backend=self.name, media_type=document.media_type,
@@ -180,6 +194,7 @@ class YoloBackend(Backend):
                     options.threshold,
                     strategy,
                     max_gap=self._temporal_gap(options),
+                    gap_report_window=self._gap_report_window(options),
                 )
                 verification = verify_video_output(
                     out,
@@ -386,6 +401,7 @@ def _redact_video(
     strategy,
     *,
     max_gap: int = DEFAULT_TEMPORAL_GAP,
+    gap_report_window: int = 30,
 ):
     """Mask every frame with bounded continuity.
 
@@ -396,7 +412,8 @@ def _redact_video(
 
     fps = video_fps(source)
     found = frames = 0
-    continuity = TemporalMaskTracker(max_gap=max_gap)
+    continuity = TemporalMaskTracker(max_gap=max_gap,
+                                     gap_report_window=gap_report_window)
     frame_buffer = {}
 
     with tempfile.TemporaryDirectory() as tmp:

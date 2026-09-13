@@ -142,3 +142,16 @@ def test_long_gap_is_reported_not_hidden(tmp_path, monkeypatch):
     ]
     assert report["source"] == str(source) and report["backend"] == "yolo"
     assert "possible exposure gap" in result.message
+
+
+def test_gap_report_window_is_bounded_operator_tunable():
+    backend = YoloBackend()
+    assert backend._gap_report_window(RedactionOptions()) == 30
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": "120"})) == 120
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": "junk"})) == 30
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": 10_000})) == 600
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": -5})) == 0
