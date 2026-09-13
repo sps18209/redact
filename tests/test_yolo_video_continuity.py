@@ -118,3 +118,40 @@ def test_failed_rerun_cannot_leave_previous_output_or_sidecar(tmp_path, monkeypa
     assert "synthetic render failure" in result.message
     assert not expected.exists()
     assert not sidecar.exists()
+
+
+def test_long_gap_is_reported_not_hidden(tmp_path, monkeypatch):
+    """A gap beyond the temporal bound must surface as an audit warning, never
+    as a silently clean run — a subject may have been exposed in between."""
+    source = tmp_path / "clip.mp4"
+    make_video(source, 7)
+    box = (5.0, 5.0, 15.0, 20.0, 0.9, "FACE")
+    wire_stubs(monkeypatch, [[box], [], [], [], [], [], [box]])
+
+    result = YoloBackend().redact(
+        Document(path=source, media_type=MediaType.VIDEO),
+        RedactionOptions(output_dir=tmp_path / "out"),
+    )
+
+    assert result.success, result.message
+    sidecar = result.output_path.with_name(result.output_path.name + ".verification.json")
+    report = json.loads(sidecar.read_text())
+    assert report["verification_status"] == "passed_with_warnings"
+    assert report["continuity"]["unresolved_gaps"] == [
+        {"label": "FACE", "first_frame": 3, "last_frame": 5}
+    ]
+    assert report["source"] == str(source) and report["backend"] == "yolo"
+    assert "possible exposure gap" in result.message
+
+
+def test_gap_report_window_is_bounded_operator_tunable():
+    backend = YoloBackend()
+    assert backend._gap_report_window(RedactionOptions()) == 30
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": "120"})) == 120
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": "junk"})) == 30
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": 10_000})) == 600
+    assert backend._gap_report_window(
+        RedactionOptions(extra={"gap_report_window": -5})) == 0

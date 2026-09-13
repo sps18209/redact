@@ -13,7 +13,22 @@ The design is deliberately bounded:
 * an unmatched track expires rather than becoming a long-lived prediction;
 * provisional masks are padded and biased toward hiding too much, not too little;
 * if a track is reacquired before emission, the provisional masks are replaced
-  with linear interpolation between the two real detections.
+  with linear interpolation between the two real detections;
+* a gap the bound refuses to bridge is *reported* rather than hidden: when a
+  new detection starts a track near a recently expired same-label one, the
+  frames that went out unmasked in between are recorded as an unresolved gap —
+  the masked -> exposed -> masked signature a verification report must
+  surface.
+
+Gap reporting sees exactly one signature and nothing else. A clean report
+means "no detected masked -> exposed -> masked sequence", **not** "no
+exposure". Structurally invisible: a subject never re-detected at all; a
+re-detection more than ``gap_report_window`` frames after expiry (the window
+is frame-based, so it shrinks in wall-clock terms at higher fps); a
+re-detection associated to a *different* live same-label track; and a
+re-detection under a different label. The frames propagation covered are
+counted as masked, but those masks are predictions — a fast subject can
+outrun them.
 
 No pixels and no model-specific objects live here. The module is dependency-free
 and works only with neutral detection tuples:
@@ -57,13 +72,21 @@ class TemporalMaskTracker:
         min_iou: float = 0.05,
         centre_gate: float = 1.25,
         padding: float = 0.12,
+        gap_report_window: int = 30,
     ) -> None:
         self.max_gap = max(0, int(max_gap))
         self.min_iou = max(0.0, float(min_iou))
         self.centre_gate = max(0.25, float(centre_gate))
         self.padding = max(0.0, float(padding))
+        # A window below max_gap + 2 could never retain an expired entry long
+        # enough to be matched (expiry itself happens max_gap + 2 frames after
+        # the last detection), silently disabling gap reporting — floor it.
+        self.gap_report_window = max(self.max_gap + 2, int(gap_report_window))
         self._tracks: Dict[int, _Track] = {}
         self._pending: Dict[int, Dict[int, Detection]] = {}
+        #: Recently expired tracks, kept only so a nearby re-detection can be
+        #: recognised as the end of an exposure window: (label, box, last_frame).
+        self._recently_expired: List[Tuple[str, Box, int]] = []
         self._next_track_id = 1
         self._last_frame = -1
         self._stats = {
@@ -72,6 +95,7 @@ class TemporalMaskTracker:
             "interpolated_masks": 0,
             "propagated_masks": 0,
             "expired_tracks": 0,
+            "unresolved_gaps": [],
             "max_gap": self.max_gap,
         }
 
@@ -95,8 +119,15 @@ class TemporalMaskTracker:
         # steal a new detection later in the scene.
         for tid, track in list(self._tracks.items()):
             if frame_index - track.last_frame - 1 > self.max_gap:
+                self._recently_expired.append(
+                    (track.label, track.last_box, track.last_frame)
+                )
                 del self._tracks[tid]
                 self._stats["expired_tracks"] += 1
+        self._recently_expired = [
+            entry for entry in self._recently_expired
+            if frame_index - entry[2] <= self.gap_report_window
+        ]
 
         matches, unmatched_dets = self._associate(frame_index, detections)
         matched_tracks = set()
@@ -146,6 +177,7 @@ class TemporalMaskTracker:
 
         for det_index in unmatched_dets:
             det = detections[det_index]
+            self._note_exposure(det, frame_index)
             tid = self._next_track_id
             self._next_track_id += 1
             self._tracks[tid] = _Track(
@@ -167,7 +199,57 @@ class TemporalMaskTracker:
 
     def stats(self) -> dict:
         """Return JSON-safe continuity accounting for an audit sidecar."""
-        return dict(self._stats)
+        report = dict(self._stats)
+        report["unresolved_gaps"] = [dict(gap) for gap in self._stats["unresolved_gaps"]]
+        return report
+
+    def _note_exposure(self, det: Detection, frame_index: int) -> None:
+        """Record the exposed frame span behind a re-detection of an expired track.
+
+        Propagation covered the first ``max_gap`` frames after the last real
+        detection; everything from there to the frame before this re-detection
+        went out unmasked. A subject may simply have left and returned, so this
+        is a warning for the audit record, never a reason to invent a
+        trajectory."""
+        best_index: Optional[int] = None
+        best_key: Optional[Tuple[float, int]] = None
+        ncx = (det[0] + det[2]) / 2.0
+        ncy = (det[1] + det[3]) / 2.0
+        for index, (label, box, last_frame) in enumerate(self._recently_expired):
+            if label != det[5]:
+                continue
+            gap = max(0, frame_index - last_frame - 1)
+            # The live-association gate widens with gap; left uncapped over a
+            # whole report window it stops being spatially selective at all
+            # (a same-label detection across the frame would still "match").
+            # Reacquisition matching caps the widening at jitter scale.
+            capped_gap = min(gap, 2 * self.max_gap + 2)
+            score = _match_score(
+                box,
+                det[:4],
+                capped_gap,
+                min_iou=self.min_iou,
+                centre_gate=self.centre_gate,
+            )
+            if score is None:
+                continue
+            # Rank candidates by proximity then recency — NOT by _match_score,
+            # whose gap-widened gate scores a staler entry higher for a worse
+            # spatial match and misattributes the span a human is told to review.
+            dist = hypot((box[0] + box[2]) / 2.0 - ncx,
+                         (box[1] + box[3]) / 2.0 - ncy)
+            key = (dist, -last_frame)
+            if best_key is None or key < best_key:
+                best_index, best_key = index, key
+        if best_index is None:
+            return
+        label, _box, last_frame = self._recently_expired.pop(best_index)
+        first_exposed = last_frame + self.max_gap + 1
+        last_exposed = frame_index - 1
+        if last_exposed >= first_exposed:
+            self._stats["unresolved_gaps"].append(
+                {"label": label, "first_frame": first_exposed, "last_frame": last_exposed}
+            )
 
     def _associate(
         self, frame_index: int, detections: Sequence[Detection]

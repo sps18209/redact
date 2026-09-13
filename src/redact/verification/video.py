@@ -9,6 +9,13 @@ The sidecar is intentionally named from the already-redacted output, e.g.
 ``clip.redacted.mp4.verification.json``. That name contains ``.redacted.`` and
 therefore satisfies the suite's ingestion-idempotence rule: a later recursive
 batch will not ingest its own verification artifact.
+
+The sidecar is an INTERNAL audit record — never deliver it alongside the
+redacted artifact. It names the source path (revealing the location of the
+unredacted original) and, when gap warnings are present, the exact frame
+ranges where a subject may be exposed: a frame-precise map for an adversarial
+recipient. Review it, act on it, keep it with the case file — not in the
+production set.
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ def verify_video_output(
     expected_frames: int,
     continuity: Optional[dict] = None,
     audio_preserved: Optional[bool] = None,
+    source: Optional[Path] = None,
+    backend: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decode ``output`` fully and return a JSON-safe verification report.
 
@@ -71,12 +80,50 @@ def verify_video_output(
             f"frame count mismatch: decoded {frames_decoded}, expected {int(expected_frames)}"
         )
 
+    malformed_continuity = None
+    if continuity is not None and not isinstance(continuity, dict):
+        malformed_continuity = continuity
+        continuity = None
     continuity = dict(continuity or {})
+    # A gap the tracker refused to bridge is honest uncertainty, not a broken
+    # artifact: the file still decodes and every detection was masked. It must
+    # never be folded into a clean "passed", and it must never outrank a hard
+    # decode failure either — a human reviews the named frames, the batch runs
+    # on. A malformed gap record from a caller degrades to a warning too: this
+    # function's contract is that it never raises.
+    warnings = []
+    if malformed_continuity is not None:
+        warnings.append(f"malformed continuity record: {malformed_continuity!r}")
+    raw_gaps = continuity.get("unresolved_gaps") or []
+    if not isinstance(raw_gaps, (list, tuple)):
+        warnings.append(f"malformed continuity unresolved_gaps: {raw_gaps!r}")
+        raw_gaps = []
+    for gap in raw_gaps:
+        if isinstance(gap, dict):
+            warnings.append(
+                "possible masked->exposed->masked sequence: "
+                f"{gap.get('label', '?')} unmasked frames "
+                f"{gap.get('first_frame', '?')}-{gap.get('last_frame', '?')}"
+            )
+        else:
+            warnings.append(f"malformed continuity gap record: {gap!r}")
+    if errors:
+        status = "failed"
+    elif warnings:
+        status = "passed_with_warnings"
+    else:
+        status = "passed"
     report: Dict[str, Any] = {
         "verification_version": 1,
+        "source": str(source) if source is not None else None,
+        "backend": backend,
         "output": str(output),
-        "verification_status": "passed" if not errors else "failed",
+        "verification_status": status,
         "passed": not errors,
+        # A caller with no tracker produces no gap records at all; that must
+        # never read the same as "gap reporting ran and found nothing".
+        "gap_reporting": "unresolved_gaps" in continuity,
+        "warnings": warnings,
         "size_bytes": size_bytes,
         "expected_frames": int(expected_frames),
         "frames_decoded": frames_decoded,
