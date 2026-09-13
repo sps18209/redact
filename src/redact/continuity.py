@@ -78,7 +78,10 @@ class TemporalMaskTracker:
         self.min_iou = max(0.0, float(min_iou))
         self.centre_gate = max(0.25, float(centre_gate))
         self.padding = max(0.0, float(padding))
-        self.gap_report_window = max(0, int(gap_report_window))
+        # A window below max_gap + 2 could never retain an expired entry long
+        # enough to be matched (expiry itself happens max_gap + 2 frames after
+        # the last detection), silently disabling gap reporting — floor it.
+        self.gap_report_window = max(self.max_gap + 2, int(gap_report_window))
         self._tracks: Dict[int, _Track] = {}
         self._pending: Dict[int, Dict[int, Detection]] = {}
         #: Recently expired tracks, kept only so a nearby re-detection can be
@@ -209,19 +212,35 @@ class TemporalMaskTracker:
         is a warning for the audit record, never a reason to invent a
         trajectory."""
         best_index: Optional[int] = None
-        best_score = float("-inf")
+        best_key: Optional[Tuple[float, int]] = None
+        ncx = (det[0] + det[2]) / 2.0
+        ncy = (det[1] + det[3]) / 2.0
         for index, (label, box, last_frame) in enumerate(self._recently_expired):
             if label != det[5]:
                 continue
+            gap = max(0, frame_index - last_frame - 1)
+            # The live-association gate widens with gap; left uncapped over a
+            # whole report window it stops being spatially selective at all
+            # (a same-label detection across the frame would still "match").
+            # Reacquisition matching caps the widening at jitter scale.
+            capped_gap = min(gap, 2 * self.max_gap + 2)
             score = _match_score(
                 box,
                 det[:4],
-                max(0, frame_index - last_frame - 1),
+                capped_gap,
                 min_iou=self.min_iou,
                 centre_gate=self.centre_gate,
             )
-            if score is not None and score > best_score:
-                best_index, best_score = index, score
+            if score is None:
+                continue
+            # Rank candidates by proximity then recency — NOT by _match_score,
+            # whose gap-widened gate scores a staler entry higher for a worse
+            # spatial match and misattributes the span a human is told to review.
+            dist = hypot((box[0] + box[2]) / 2.0 - ncx,
+                         (box[1] + box[3]) / 2.0 - ncy)
+            key = (dist, -last_frame)
+            if best_key is None or key < best_key:
+                best_index, best_key = index, key
         if best_index is None:
             return
         label, _box, last_frame = self._recently_expired.pop(best_index)

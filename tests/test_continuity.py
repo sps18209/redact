@@ -142,3 +142,49 @@ def test_stats_returns_an_isolated_copy():
     assert tracker.stats()["unresolved_gaps"] == [
         {"label": "FACE", "first_frame": 2, "last_frame": 3}
     ]
+
+
+def test_reacquisition_attributes_the_gap_to_the_nearest_expired_track():
+    """The gap-widened match score would prefer the staler, farther entry;
+    attribution must go to the spatially nearest one — those frame ranges
+    are exactly what a human is told to review."""
+    tracker = TemporalMaskTracker(max_gap=1)
+    tracker.push(0, [det(30, 40), det(0, 10)])   # S1 (once) and S2
+    for idx in range(1, 8):                      # S2 tracked through frame 7
+        tracker.push(idx, [det(0, 10)])
+    for idx in range(8, 12):                     # both lost
+        tracker.push(idx, [])
+    tracker.push(12, [det(10, 20)])              # S2 returns, 10 px away
+    tracker.flush()
+
+    gaps = tracker.stats()["unresolved_gaps"]
+    # Attributed to S2 (last seen frame 7, propagation covered frame 8):
+    # exposed 9-11 — not to S1's frame-0 entry, which would claim 2-11.
+    assert gaps == [{"label": "FACE", "first_frame": 9, "last_frame": 11}]
+
+
+def test_far_reacquisitions_beyond_jitter_scale_are_not_gaps():
+    """Uncapped, the gap-widened gate matches a same-label detection across
+    the whole frame; capped at jitter scale it must reject it."""
+    tracker = TemporalMaskTracker(max_gap=2)
+    tracker.push(0, [det(0, 100)])
+    for idx in range(1, 25):
+        tracker.push(idx, [])
+    tracker.push(25, [det(1900, 2000)])          # opposite side of the frame
+    tracker.flush()
+    assert tracker.stats()["unresolved_gaps"] == []
+
+
+def test_report_window_is_floored_so_reporting_cannot_be_disabled():
+    """A window below max_gap + 2 would prune every expired entry before it
+    could ever be matched — the constructor floors it."""
+    tracker = TemporalMaskTracker(max_gap=2, gap_report_window=0)
+    assert tracker.gap_report_window == 4
+    tracker.push(0, [det(0, 10)])
+    for idx in range(1, 4):
+        tracker.push(idx, [])
+    tracker.push(4, [det(0, 10)])                # re-detected at expiry frame
+    tracker.flush()
+    assert tracker.stats()["unresolved_gaps"] == [
+        {"label": "FACE", "first_frame": 3, "last_frame": 3}
+    ]
