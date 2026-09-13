@@ -1,7 +1,7 @@
 # redact-suite
 
 A unified **PII/PHI redaction suite**. Point it at *any* document — text, CSV/JSON,
-Word (.docx), Excel (.xlsx), PDF, image, or video — and it routes each file to the best available redaction
+Word (.docx), Excel (.xlsx), PowerPoint (.pptx), email (.eml/.mbox), PDF, image, or video — and it routes each file to the best available redaction
 tool, or one you pick by hand. A dependency-free rule engine ships built in, so
 the suite works out of the box and every heavy tool is opt-in.
 
@@ -26,8 +26,8 @@ each document to the tool that fits.
 
 | Backend | Handles | What it does | Requires |
 |---|---|---|---|
-| **builtin** | text, structured, docx, xlsx | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Word documents in place, formatting intact. Always available. | nothing (stdlib) |
-| **presidio** | text, structured, docx, xlsx | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
+| **builtin** | text, structured, docx, xlsx, pptx, email | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Office documents and email in place, formatting intact. Always available. | nothing (stdlib) |
+| **presidio** | text, structured, docx, xlsx, pptx, email | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual redaction via local Ollama models. | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
@@ -231,6 +231,57 @@ Numeric cells are deliberately **not** scanned — an SSN stored as the number
 `123456789` is indistinguishable from any other identifier without column
 context, and guessing there would do more harm than good.
 
+### Presentations
+
+`.pptx`/`.pptm` decks are redacted in place. A deck hides text in more places
+than it shows:
+
+| Where | What the suite does |
+|---|---|
+| Slide shapes and tables | Redacted; split runs joined first, same engine as Word |
+| **Speaker notes** | Redacted — the single most-forgotten leak in a shared deck |
+| Slide layouts & masters | Scanned; a name typed into a master shows on every slide |
+| Comments and their authors | Text redacted, authors scrubbed |
+| **Chart value caches** (`c:v`) | Scanned — a chart keeps its own copy of the source data |
+| `docProps`, embedded media | Metadata scrubbed; media governed by `--docx-images` |
+
+A deck has no single linear text flow, so findings are reported by part
+(`US_SSN in notesSlide2`) rather than by character offset.
+
+### Email
+
+`.eml` and `.mbox` messages are redacted in place and stay valid RFC 5322 —
+they still open in a mail client, with all headers present.
+
+| Where | What the suite does |
+|---|---|
+| Headers (`From`, `To`, `Cc`, `Bcc`, `Subject`, `Received`, `Message-ID`, …) | Redacted |
+| Text and HTML parts | Decoded through their transfer encoding, redacted, **re-encoded** |
+| Forwarded `message/rfc822` parts | Walked recursively; a quoted thread is redacted too |
+| `.mbox` archives | Split into individual messages first (including the envelope-sender `From ` line), redacted one by one, and rejoined — the archive still opens as a mailbox |
+| Binary attachments (PDF, image, …) | See below |
+
+**The base64 trap.** A PII-laden attachment is stored base64-encoded, so it is
+invisible to any tool that greps the raw file — including the obvious way a user
+verifies the output. The suite decodes text parts before scanning so they cannot
+hide that way, and for *binary* attachments it refuses to pretend:
+
+```bash
+redact run msg.eml                              # default: keep
+# WARNING: r.pdf left unredacted (binary attachment)
+# echo $? → 1
+
+redact run msg.eml --eml-attachments strip      # replace payload with a notice
+# echo $? → 0
+```
+
+### Exit codes
+
+`0` means the output is safe. The CLI exits **non-zero** when a run knowingly
+left content unredacted (today: kept binary attachments), separately from
+`success=False` failures — because `exit 0` from a redaction tool is a promise
+automation will act on.
+
 ### `run` options
 
 | Flag | Meaning |
@@ -243,7 +294,8 @@ context, and guessing there would do more harm than good.
 | `--dry-run` | detect and report only |
 | `--yolo-model` | checkpoint for the `yolo` backend (default open-vocabulary `yolov8s-worldv2.pt`) |
 | `--yolo-classes` | text prompts for the `yolo` backend, e.g. `"license plate,ID card"` |
-| `--docx-images` | embedded images in a `.docx`: `keep` (default), `strip`, `blur` |
+| `--docx-images` | embedded images in a `.docx`/`.pptx`: `keep` (default), `strip`, `blur` |
+| `--eml-attachments` | binary attachments in an email: `keep` (default, warns and exits non-zero), `strip` |
 | `--match` | only redact visual files matching this description |
 | `--match-threshold` | calibrated score a `--match` must reach (0-1, default `0.05`) |
 | `--no-recursive` | do not walk directories recursively |

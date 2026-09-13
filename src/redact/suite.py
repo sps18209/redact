@@ -81,7 +81,7 @@ class RedactionSuite:
         injects a callable; ``docx.redact_docx`` strips any image the callable
         declines, so the policy degrades safely when no such backend exists.
         """
-        office = (MediaType.DOCX, MediaType.XLSX)
+        office = (MediaType.DOCX, MediaType.XLSX, MediaType.PPTX)
         if document.media_type not in office or options.docx_images != "blur":
             return options
         if options.extra.get("image_redactor") is not None:

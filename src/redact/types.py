@@ -24,6 +24,8 @@ class MediaType(str, enum.Enum):
     STRUCTURED = "structured"  # csv, json, tsv, log, xml, yaml
     DOCX = "docx"          # Word documents (zip of XML parts)
     XLSX = "xlsx"          # Excel workbooks (same OPC zip family)
+    PPTX = "pptx"          # PowerPoint decks (same OPC zip family)
+    EMAIL = "email"        # RFC 5322 messages (.eml), headers + MIME parts
     PDF = "pdf"
     IMAGE = "image"
     VIDEO = "video"
@@ -85,6 +87,8 @@ class RedactionOptions:
     dry_run: bool = False  # detect + report, but do not write redacted output
     #: What to do with images embedded in a .docx: keep | strip | blur.
     docx_images: str = "keep"
+    #: What to do with email attachments that cannot be redacted: keep | strip.
+    eml_attachments: str = "keep"
     extra: dict = field(default_factory=dict)  # backend-specific escape hatch
 
 
@@ -100,10 +104,20 @@ class RedactionResult:
     output_path: Optional[Path] = None
     redacted_text: Optional[str] = None
     message: str = ""
+    #: Content this run knowingly did NOT redact (e.g. a binary email
+    #: attachment). A run that leaves any of this is not a clean redaction, and
+    #: the CLI exits non-zero for it — "exit 0" from a redaction tool has to
+    #: mean the output is safe, or automation is being told a comfortable lie.
+    unredacted: List[str] = field(default_factory=list)
 
     @property
     def entity_count(self) -> int:
         return len(self.entities)
+
+    @property
+    def fully_redacted(self) -> bool:
+        """True when nothing was knowingly left behind."""
+        return self.success and not self.unredacted
 
     def summary(self) -> str:
         status = "ok" if self.success else "FAILED"

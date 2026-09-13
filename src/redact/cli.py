@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
         "to a blank placeholder, or blur faces with an image backend",
     )
     p_run.add_argument(
+        "--eml-attachments", default="keep", choices=["keep", "strip"],
+        help="email attachments that cannot be redacted in place: keep them "
+        "(default — reported loudly, never silently) or strip them out",
+    )
+    p_run.add_argument(
         "--dry-run", action="store_true",
         help="detect and report, but write nothing",
     )
@@ -214,6 +219,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         threshold=args.threshold,
         mask_char=args.mask_char,
         docx_images=args.docx_images,
+        eml_attachments=args.eml_attachments,
         extra=_yolo_extra(args),
         output_dir=Path(args.out) if args.out else None,
         dry_run=args.dry_run,
@@ -239,18 +245,35 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
 
     total = 0
     failures = 0
+    incomplete = 0
     for result in (suite.redact_document(doc, options) for doc in documents):
         total += 1
         if not result.success:
             failures += 1
+        elif result.unredacted:
+            incomplete += 1
         print(result.summary())
 
     _report_skipped(skipped, args.include_unknown)
     if total == 0:
         print("no matching documents found", file=sys.stderr)
         return 1
-    print(f"\n{total} document(s) processed, {failures} failed.", file=sys.stderr)
-    return 1 if failures else 0
+
+    summary = f"\n{total} document(s) processed, {failures} failed"
+    if incomplete:
+        summary += f", {incomplete} left content unredacted"
+    print(summary + ".", file=sys.stderr)
+    if incomplete:
+        # Exit 0 from a redaction tool means "the output is safe to share".
+        # Saying that while content is knowingly unredacted would mislead any
+        # script that checks the exit code instead of reading the log.
+        print(
+            f"{incomplete} document(s) still contain unredacted content — "
+            "see the warnings above; exiting non-zero so automation does not "
+            "treat this as a clean run.",
+            file=sys.stderr,
+        )
+    return 1 if (failures or incomplete) else 0
 
 
 def _cmd_search(args: argparse.Namespace) -> int:

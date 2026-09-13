@@ -38,6 +38,9 @@ _EXTENSION_MAP = {
     # .xlsm is the same package with a macro payload; the macro itself is
     # copied untouched (documented limit in xlsx.py).
     ".xlsm": MediaType.XLSX,
+    ".pptx": MediaType.PPTX, ".pptm": MediaType.PPTX,
+    # email
+    ".eml": MediaType.EMAIL, ".mbox": MediaType.EMAIL,
     # pdf
     ".pdf": MediaType.PDF,
     # images
@@ -126,6 +129,8 @@ def _sniff_zip(path: Path) -> MediaType:
         return MediaType.DOCX
     if "xl/workbook.xml" in names:
         return MediaType.XLSX
+    if "ppt/presentation.xml" in names:
+        return MediaType.PPTX
     return MediaType.UNKNOWN
 
 

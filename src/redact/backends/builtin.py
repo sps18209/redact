@@ -165,6 +165,11 @@ def apply_redactions(
 
 
 
+#: Structured formats driven by ``redact_office_document`` rather than read as
+#: flat text. Kept in one place so a new format is wired in once.
+_OFFICE_MEDIA = (MediaType.DOCX, MediaType.XLSX, MediaType.PPTX, MediaType.EMAIL)
+
+
 class BuiltinBackend(Backend):
     """Rule-based, offline redactor for text and structured files."""
 
@@ -172,6 +177,7 @@ class BuiltinBackend(Backend):
     description = "Dependency-free regex/rule engine for text & structured data (always available)."
     supported_media_types = (
         MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.XLSX,
+        MediaType.PPTX, MediaType.EMAIL,
     )
     priority = 10  # low: a safe fallback, beaten by purpose-built tools
 
@@ -179,7 +185,7 @@ class BuiltinBackend(Backend):
         return []  # stdlib only
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
-        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
+        if document.media_type in _OFFICE_MEDIA:
             return self._redact_office(document, options)
         try:
             text = document.read_text()
@@ -239,10 +245,15 @@ def redact_office_document(
     engine and Presidio): the backend supplies ``detect``; replacement, image
     policy, output naming and error handling are identical for all of them.
     """
+    from ..eml import EmlError
     from ..opc import AUTHOR_ENTITY, IMAGE_ENTITY, OpcError
 
     if document.media_type is MediaType.XLSX:
         from ..xlsx import redact_xlsx as redact_office
+    elif document.media_type is MediaType.PPTX:
+        from ..pptx import redact_pptx as redact_office
+    elif document.media_type is MediaType.EMAIL:
+        from ..eml import redact_eml as redact_office
     else:
         from ..docx import redact_docx as redact_office
 
@@ -255,22 +266,27 @@ def redact_office_document(
     if wanted is not None and IMAGE_ENTITY not in wanted:
         policy = "keep"  # an entity filter that excludes images means leave them
     try:
+        extra_kwargs = (
+            {"attachment_policy": options.eml_attachments}
+            if document.media_type is MediaType.EMAIL
+            else {"image_policy": policy, "image_redactor": options.extra.get("image_redactor")}
+        )
         office = redact_office(
             document.path,
             out,
             detect=detect,
             replace=lambda entity: replacement_for(entity, options),
             scrub_authors=(wanted is None or AUTHOR_ENTITY in wanted),
-            image_policy=policy,
-            image_redactor=options.extra.get("image_redactor"),
+            **extra_kwargs,
         )
-    except (OpcError, OSError, ValueError) as exc:
+    except (OpcError, EmlError, OSError, ValueError) as exc:
         result.success = False
         result.message = f"could not redact .{document.media_type}: {exc}"
         return result
 
     result.entities = office.entities
     result.redacted_text = office.redacted_text
+    result.unredacted = list(getattr(office, "unredacted_attachments", []))
     notes = list(office.notes)
     if options.dry_run:
         notes.insert(0, "dry-run: detected only, nothing written")

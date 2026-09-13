@@ -31,7 +31,12 @@ from ..types import (
 )
 from ..opc import resolve_overlaps
 from .base import Backend
-from .builtin import apply_redactions, detect_entities, redact_office_document
+from .builtin import (
+    _OFFICE_MEDIA,
+    apply_redactions,
+    detect_entities,
+    redact_office_document,
+)
 
 
 def _module_present(name: str) -> bool:
@@ -46,6 +51,7 @@ class PresidioBackend(Backend):
     description = "Microsoft Presidio — NLP + rules PII detection/anonymization for text (MIT)."
     supported_media_types = (
         MediaType.TEXT, MediaType.STRUCTURED, MediaType.DOCX, MediaType.XLSX,
+        MediaType.PPTX, MediaType.EMAIL,
     )
     install_hint = (
         'pip install "redact-suite[presidio]" && python -m spacy download en_core_web_lg'
@@ -87,7 +93,7 @@ class PresidioBackend(Backend):
         # an earlier version let Presidio's AnonymizerEngine handle text, which
         # skipped the deterministic union below and shipped a .txt file with the
         # SSN still in it.
-        if document.media_type in (MediaType.DOCX, MediaType.XLSX):
+        if document.media_type in _OFFICE_MEDIA:
             return redact_office_document(self.name, document, options, detect=detect)
 
         try:

@@ -5,7 +5,8 @@ Guidance for Claude Code (and humans) working in this repository.
 ## What this is
 
 `redact-suite` is a **unified PII/PHI redaction suite**. It ingests any document
-(text, structured data, Word .docx, PDF, image, video), detects its media type, and routes
+(text, structured data, Word .docx, Excel .xlsx, PowerPoint .pptx, email .eml,
+PDF, image, video), detects its media type, and routes
 it to the best *available* redaction backend — or one the user names explicitly.
 A dependency-free rule engine ships built in, so the suite always works; every
 heavy tool (Presidio, Philter, RedactAI/Ollama, pdf-redact-tools, Anonymizer) is
@@ -35,9 +36,11 @@ CLI, and every adapter are decoupled from any specific tool.
 |---|---|
 | `src/redact/types.py` | Core dataclasses/enums: `MediaType`, `RedactionMode`, `Entity`, `RedactionOptions`, `RedactionResult`. Dependency-free — the shared vocabulary. |
 | `src/redact/document.py` | Ingestion: `MediaType` detection, `load_document`, `iter_documents` (files/dirs/globs), and **`output_path`** — the one rule for where artifacts go. |
-| `src/redact/opc.py` | Shared Office Open XML plumbing for `.docx`/`.xlsx`: namespace-safe parse/serialize, split-run rewriting, image policy, rels retargeting, package writing. |
+| `src/redact/opc.py` | Shared Office Open XML plumbing for `.docx`/`.xlsx`/`.pptx`: namespace-safe parse/serialize, split-run rewriting, image policy, rels retargeting, package writing. |
 | `src/redact/xlsx.py` | Excel: shared strings (deduped, located by cell), rich-text runs, cached formula results, comments, headers/footers, drawings. |
 | `src/redact/docx.py` | Stdlib `.docx` support: paragraph-level detection mapped back onto `<w:t>` runs; also tracked deletions, field codes, revision/comment authors, docProps, `.rels` hyperlink targets and embedded images. Word-safe XML round-trip. |
+| `src/redact/pptx.py` | Stdlib `.pptx`/`.pptm` support: slide shapes, **speaker notes**, layouts/masters, comments + authors, chart value caches, docProps, media. |
+| `src/redact/eml.py` | Stdlib `.eml`/`.mbox` support: headers, transfer-decoded text/HTML parts, forwarded `message/rfc822` parts, and an explicit policy for binary attachments. |
 | `src/redact/backends/base.py` | `Backend` ABC — the adapter contract. |
 | `src/redact/backends/builtin.py` | Offline regex/rule engine. Also exports reusable `detect_entities` / `apply_redactions`. Always available. |
 | `src/redact/backends/presidio.py` | Microsoft Presidio (text/structured), optional import. |
@@ -89,6 +92,7 @@ redact run notes.txt -b presidio      # force a backend
 redact run data.csv -m mask           # mask instead of <TYPE> placeholder
 redact run notes.txt --dry-run        # detect only, write nothing
 redact run notes.txt -e EMAIL_ADDRESS,US_SSN   # restrict entity types (comma or repeat -e)
+redact run msg.eml --eml-attachments strip     # drop binary attachments we cannot redact
 python -m redact list                 # module entry point equivalent
 ```
 
@@ -105,6 +109,13 @@ python -m redact list                 # module entry point equivalent
   guaranteed fallback and the source of the shared `detect_entities` helper.
 - **Redaction modes** live in `RedactionMode`; text rewriting is centralized in
   `builtin.apply_redactions`. Reuse it rather than re-implementing per backend.
+- **`exit 0` must mean the output is safe.** `RedactionResult.unredacted` lists
+  content a run knowingly left behind (today: kept binary email attachments) and
+  `fully_redacted` folds that into `success`; the CLI exits non-zero for it,
+  separately from outright failures. A backend that cannot redact part of a
+  document must populate `unredacted` rather than report a clean success —
+  false assurance is worse than non-coverage, because it defeats the user's own
+  verification of the output.
 - Keep the CLI's three verbs (`list`/`detect`/`run`) thin — logic belongs in the
   suite/router/backends, not `cli.py`.
 - **Ingestion never re-reads the suite's own outputs** (`document.is_redaction_output`)
@@ -125,9 +136,10 @@ python -m redact list                 # module entry point equivalent
   when constructing documents in new code paths.
 - **Office formats go through `builtin.redact_office_document`** — the shared
   entry point both the builtin engine and Presidio use, dispatching to
-  `docx.redact_docx` or `xlsx.redact_xlsx` with `detect`/`replace` callbacks. A
-  new text backend gets Word *and* Excel support by calling it with its own
-  `detect`; never reimplement the orchestration. (`redact_docx_document` remains
+  `docx.redact_docx`, `xlsx.redact_xlsx`, `pptx.redact_pptx` or `eml.redact_eml`
+  with `detect`/`replace` callbacks. A new text backend gets Word, Excel,
+  PowerPoint *and* email support by calling it with its own `detect`; never
+  reimplement the orchestration. (`redact_docx_document` remains
   as an alias.)
 - **Format-agnostic OPC logic lives in `opc.py`**, not in `docx.py`/`xlsx.py`:
   parse/serialize, `rewrite_pieces` (split runs), image policy, rels, package
@@ -136,6 +148,19 @@ python -m redact list                 # module entry point equivalent
   `sharedStrings.xml` so one edit covers many cells — findings are located by
   walking sheets; and a cached formula result must have its *formula removed*,
   because rewriting only `<v>` is undone the moment Excel recalculates.
+- **PowerPoint-specific hazards** (see `pptx.py`): **speaker notes** are a
+  separate part (`notesSlides/`) and are the most-forgotten leak in a shared
+  deck; layouts and masters carry text onto every slide; and a chart keeps its
+  own cache of the source data in `c:v`. A deck has no linear text flow, so
+  findings carry `start`/`end` of `None` and name their part instead.
+- **Email-specific hazards** (see `eml.py`): parts are transfer-encoded, so
+  `_part_text` decodes before scanning and `_set_part_text` re-encodes after —
+  the stored bytes really change. `_walk` descends into `message/rfc822` so a
+  forwarded thread is redacted too. An `.mbox` is split on `From ` lines before
+  parsing — handing a mailbox to a single-message parser folds messages 2..N
+  into message 1's *body*, which still redacts the text but destroys the archive
+  while reporting a clean run. Binary attachments cannot be redacted in place: they go to `unredacted` (warning + non-zero exit) unless
+  `--eml-attachments strip` replaces the payload.
 - **`docx.py` serialization is fragile by nature.** Keep the root-tag
   preservation *and* the default-namespace registration in `_parse`: ElementTree
   drops unused `xmlns:` declarations (Word then rejects the file over
