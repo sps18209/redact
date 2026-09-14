@@ -365,6 +365,15 @@ python -m redact list                 # module entry point equivalent
   the JSON unparseable, which defeats the point of offering it; `_human_stream`
   decides. Reporting is also wrapped so an unwritable path cannot change a run's
   exit code — the redaction already happened.
+- **`media.ffmpeg_bin()` probes, it does not just locate.** Reported from a
+  real machine: Homebrew bumped x265 4.2 -> 4.3 while ffmpeg was still linked
+  against the old soname, so `which ffmpeg` kept returning a path and every
+  invocation died with a linker error — and the bundled `imageio-ffmpeg` static
+  build, which exists for exactly this, was never reached because the code
+  stopped at "found". The probe result is memoised (`_FFMPEG`, `refresh=True` to
+  re-probe) since a subprocess per call is too costly for the video paths. Guard
+  tests on `ffmpeg_bin() is None`, never `shutil.which("ffmpeg") is None`, and
+  invoke the *resolved* binary in test bodies — the bundled build is not on PATH.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

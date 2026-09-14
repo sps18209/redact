@@ -1,11 +1,12 @@
 """Regression tests for defects found in the post-build audit."""
 
-import shutil
 import stat
 import sys
 from pathlib import Path
 
 import pytest
+
+from redact.media import ffmpeg_bin as _ffmpeg_bin
 
 from redact.backends.anonymizer import AnonymizerBackend
 from redact.backends.base import Backend
@@ -179,14 +180,20 @@ def test_anonymizer_unavailable_without_config(monkeypatch):
     assert AnonymizerBackend().missing_dependencies()
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+# Presence is not usability: a system ffmpeg whose shared libraries moved (a
+# package manager bumping x265 under it) is still on PATH and still fails. Guard
+# on "does it run", or this skips nothing and dies with a linker error instead.
+@pytest.mark.skipif(_ffmpeg_bin() is None, reason="no usable ffmpeg")
 def test_anonymizer_video_roundtrip_with_fake_cli(tmp_path, fake_anonymizer):
     import subprocess
 
     video = tmp_path / "clip.mp4"
+    # Use the binary the suite itself resolved, not the bare name: the guard
+    # above passes when only the bundled static build is usable, and that one is
+    # not on PATH.
     subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
-         "-r", "10", str(video)],
+        [_ffmpeg_bin(), "-y", "-v", "error", "-f", "lavfi",
+         "-i", "color=c=red:s=64x64:d=1", "-r", "10", str(video)],
         check=True,
     )
     res = AnonymizerBackend().redact(

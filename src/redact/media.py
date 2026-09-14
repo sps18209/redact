@@ -12,17 +12,53 @@ from pathlib import Path
 from typing import Optional
 
 
-def ffmpeg_bin() -> Optional[str]:
-    """A usable ffmpeg: the system one, else the static build imageio ships."""
+#: Memoised answer from :func:`ffmpeg_bin`; probing spawns a subprocess and the
+#: video paths ask repeatedly. ``False`` means "probed, nothing usable".
+_FFMPEG: "Optional[str] | bool" = False
+
+
+def _runs(candidate: str) -> bool:
+    """True only if the binary actually executes.
+
+    Presence on PATH is not usability. A system ffmpeg whose shared libraries
+    have moved out from under it — a package manager upgrading x265 while ffmpeg
+    is still linked against the old soname is the common way — is still found by
+    ``which`` and still fails on every invocation.
+    """
+    try:
+        completed = subprocess.run(
+            [candidate, "-version"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def ffmpeg_bin(refresh: bool = False) -> Optional[str]:
+    """A usable ffmpeg: the system one if it runs, else imageio's static build.
+
+    The system binary is *probed*, not merely located. Returning a broken one
+    would skip the bundled fallback that exists for exactly this case, and turn
+    a recoverable situation into a cryptic linker error from the middle of a
+    video redaction.
+    """
+    global _FFMPEG
+    if _FFMPEG is not False and not refresh:
+        return _FFMPEG
+
     found = shutil.which("ffmpeg")
-    if found:
-        return found
+    if found and _runs(found):
+        _FFMPEG = found
+        return _FFMPEG
     try:
         import imageio_ffmpeg
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        static = imageio_ffmpeg.get_ffmpeg_exe()
+        _FFMPEG = static if static and _runs(static) else None
     except Exception:
-        return None
+        _FFMPEG = None
+    return _FFMPEG
 
 
 def video_fps(path: Path, default: float = 30.0) -> float:
