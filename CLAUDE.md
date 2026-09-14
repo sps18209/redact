@@ -46,6 +46,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/backends/presidio.py` | Microsoft Presidio (text/structured), optional import. |
 | `src/redact/backends/philter.py` | Philter service over HTTP (stdlib urllib). |
 | `src/redact/backends/redactai.py` | RedactAI-style contextual PDF redaction via local Ollama. |
+| `src/redact/backends/pymupdf.py` | True in-place PDF redaction: per-page detect, `search_for` to locate, `apply_redactions` to remove, metadata scrubbed. Declares scanned pages and unlocatable entities as `unredacted`. |
 | `src/redact/backends/pdf_redact_tools.py` | Shells out to `pdf-redact-tools` CLI. |
 | `src/redact/semantic.py` | CLIP semantic search: embed images + sampled video frames, calibrated scoring, on-disk index, and `filter_documents` behind `run --match`. |
 | `src/redact/media.py` | Shared ffmpeg discovery (system, else the static `imageio-ffmpeg` build), video fps, and audio muxing. |
@@ -69,6 +70,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `builtin` | text, structured, docx, xlsx, pptx, eml | 10 | nothing (stdlib) |
 | `presidio` | text, structured, docx, xlsx, pptx, eml | 80 | `presidio-analyzer` + a spaCy model (`en_core_web_lg`). **Not** `presidio-anonymizer`: this suite uses Presidio for detection only and does its own rewriting, so requiring it would be a lie — see the note below and the `[presidio]` extra. |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
+| `pymupdf` | pdf | 75 | `pymupdf`. **The only backend that truly redacts a PDF while keeping it a document** — `apply_redactions` removes text from the content stream. AGPL-3.0 (like ultralytics), opt-in. |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
 | `yolo` | image, video | 65 | `ultralytics` + `opencv-python`. Open-vocabulary (YOLO-World) by default, so classes are text prompts — **the only working license-plate path**. Below deface on purpose: deface is the better *face* detector, so `auto` keeps it. |
 | `deface` | image, video | 70 | `deface` (pip). Bundled CenterFace ONNX model + static ffmpeg, so fully offline. **Faces only — no license plates.** |
@@ -290,6 +292,18 @@ python -m redact list                 # module entry point equivalent
   the only backend that redacts a PDF itself (by flattening it to images).
   Black rectangles drawn over text are not redaction: the characters remain in
   the content stream. Do not add a "PDF redaction" path that only draws boxes.
+- **`pymupdf` is the PDF path that actually works.** `apply_redactions` removes
+  content from the page's content stream; verified by asserting the value is
+  absent from the **raw bytes**, not from the rendering. Never replace it with
+  drawn rectangles — the characters survive underneath. Two cases must stay in
+  `unredacted` or the backend starts lying: a **page with no text layer** (a
+  scan — detection finds nothing and "0 entities" would read as clean) and a
+  **detected entity `search_for` cannot locate** (ligatures, hyphenation, text
+  split across spans). Both are regression-tested in `tests/test_pymupdf.py`.
+- **Don't assert on failure *wording* in suite-level tests.** `test_suite.py`
+  hard-coded "no pdf backend in CI"; installing one turned a passing test red
+  for the wrong reason. Assert the contract — the batch continues, the failure
+  comes back as a result with a message and no output path.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

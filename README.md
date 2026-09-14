@@ -29,6 +29,7 @@ each document to the tool that fits.
 | **builtin** | text, structured, docx, xlsx, pptx, email | Offline regex/rule engine (email, phone, SSN, card w/ Luhn, IBAN, IP, URL). Redacts Office documents and email in place, formatting intact. Always available. | nothing (stdlib) |
 | **presidio** | text, structured, docx, xlsx, pptx, email | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
+| **pymupdf** | pdf | **True in-place PDF redaction** — removes text from the content stream (not a box drawn over it) and scrubs metadata. One pip install, no system dependencies. AGPL-3.0, opt-in. | `pip install "redact-suite[pymupdf]"` |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
@@ -284,17 +285,35 @@ automation will act on.
 
 ### PDFs
 
-There is no dependency-light path that truly redacts a PDF in place, and the
-suite does not pretend otherwise:
+```bash
+pip install "redact-suite[pymupdf]"
+redact run chart.pdf
+```
 
 | Backend | What you actually get |
 |---|---|
-| `pdf-redact-tools` | A genuinely sanitised PDF — flattened to images, text layer and hidden metadata gone. **The only backend that redacts the PDF itself.** |
-| `redactai` | Detection over the PDF's text layer plus a redacted `.txt` *extract*. The source PDF is **not** modified, so the run is reported as leaving content unredacted and exits non-zero. |
+| **`pymupdf`** *(default for PDF)* | **True redaction.** The text is removed from the page's content stream and the metadata scrubbed. The document stays a document — still selectable, searchable, accessible. |
+| `pdf-redact-tools` | Flattens every page to an image. More thorough (it destroys content you never detected) but the result is a picture of a document: no text, no search, no screen reader. An explicit choice, not the automatic one. |
+| `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
 
-Drawing black rectangles over a PDF's text is not redaction — the characters
-stay in the content stream and any `pdftotext` recovers them. Rather than ship
-that, the suite reports honestly and points you at the backend that works.
+Drawing black rectangles over text is not redaction — the characters stay in the
+content stream and any `pdftotext` recovers them. So the test for `pymupdf` is
+that the value is gone from the **raw bytes**, not that the page looks right.
+
+**Scanned PDFs.** A scan is an image of text: there is no text layer, so
+detection finds nothing and a naive tool reports a spotless run over a document
+full of PII. Pages carrying images but no text are reported and the run exits
+non-zero:
+
+```
+[ok] scanned.pdf via pymupdf (pdf): 0 entities -> scanned.redacted.pdf | WARNING:
+page(s) 1 carry images but no text layer — a scan reads as 'nothing found'.
+OCR it, or flatten with -b pdf-redact-tools
+```
+
+A detected entity whose position can't be resolved on the page (ligatures,
+hyphenation, text split across spans) is reported the same way rather than
+silently skipped.
 
 ### Redaction modes
 

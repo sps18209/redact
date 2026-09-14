@@ -14,7 +14,7 @@ def test_suite_redacts_text_file_via_builtin(tmp_path, builtin_only_suite):
 def test_suite_batch_mixed_folder(tmp_path):
     (tmp_path / "a.txt").write_text("a@b.com")
     (tmp_path / "b.csv").write_text("name,ssn\nBob,123-45-6789")
-    (tmp_path / "c.pdf").write_bytes(b"%PDF-1.4 fake")  # no pdf backend in CI
+    (tmp_path / "c.pdf").write_bytes(b"%PDF-1.4 fake")  # not a parseable PDF
     out = tmp_path / "out"
 
     suite = RedactionSuite()
@@ -24,9 +24,14 @@ def test_suite_batch_mixed_folder(tmp_path):
     by_name = {r.source.name: r for r in results}
     assert by_name["a.txt"].success
     assert by_name["b.csv"].success
-    # pdf has no available backend offline -> routing failure surfaced, not raised
+    # The point is that one bad document neither aborts the batch nor raises:
+    # the failure comes back as a result the caller can inspect. Don't assert on
+    # the wording — it depends on whether a PDF backend is installed (routing
+    # refuses when none is, pymupdf refuses to parse it when one is), and this
+    # test previously hard-coded the no-backend case.
     assert by_name["c.pdf"].success is False
-    assert "backend" in by_name["c.pdf"].message.lower()
+    assert by_name["c.pdf"].message.strip(), "a failure must explain itself"
+    assert by_name["c.pdf"].output_path is None
 
 
 def test_describe_backends_has_all_defaults():

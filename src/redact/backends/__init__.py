@@ -7,6 +7,7 @@ from .deface import DefaceBackend
 from .pdf_redact_tools import PdfRedactToolsBackend
 from .philter import PhilterBackend
 from .presidio import PresidioBackend
+from .pymupdf import PyMuPDFBackend
 from .redactai import RedactAIBackend
 from .yolo import YoloBackend
 
@@ -19,6 +20,7 @@ DEFAULT_BACKENDS = [
     PhilterBackend,
     RedactAIBackend,
     PdfRedactToolsBackend,
+    PyMuPDFBackend,
     YoloBackend,
     AnonymizerBackend,
 ]
@@ -31,6 +33,7 @@ __all__ = [
     "PhilterBackend",
     "RedactAIBackend",
     "PdfRedactToolsBackend",
+    "PyMuPDFBackend",
     "YoloBackend",
     "AnonymizerBackend",
     "DEFAULT_BACKENDS",
