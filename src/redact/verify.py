@@ -217,9 +217,33 @@ def _structured_text(path: Path, media_type: MediaType) -> Dict[str, str]:
             out["eml:text"] = extract_text(path)
         elif media_type is MediaType.PDF:
             out.update(_pdf_text(path))
+        elif media_type is MediaType.IMAGE:
+            out.update(_image_text(path))
     except Exception:  # a malformed file must not abort verification
         pass
     return out
+
+
+def _image_text(path: Path) -> Dict[str, str]:
+    """Text rendered as pixels — the layer a text search cannot reach.
+
+    Without this, verifying a screenshot searched the PNG's compressed bytes,
+    found nothing, and reported ``clean`` over a legible SSN. A verifier that
+    cannot read the format it was handed must say so, not pass it.
+    """
+    from . import ocr
+
+    if not ocr.available():
+        return {"image:<no ocr>": ""}
+    try:
+        readings = [t for t, _ in ocr.read_regions(path)]
+    except Exception:
+        return {"image:<no ocr>": ""}
+    # Both the raw reading and the boundary-restored one, for the same reason
+    # the OCR backend scans both: the engine runs "SSN 078-05-1120" together as
+    # "SSN078-05-1120", and \b-anchored patterns then miss it.
+    lines = readings + [ocr.boundary_restored(t) for t in readings]
+    return {"image:ocr": "\n".join(lines)}
 
 
 def _pdf_text(path: Path) -> Dict[str, str]:
@@ -246,6 +270,12 @@ def _pdf_text(path: Path) -> Dict[str, str]:
 
 # -- verification -------------------------------------------------------------
 
+def ocr_hint() -> str:
+    from . import ocr
+
+    return ocr.INSTALL_HINT
+
+
 def verify_path(
     path: Path,
     entities: Optional[Sequence[str]] = None,
@@ -271,6 +301,15 @@ def verify_path(
         report.note = (
             'no PDF engine installed — only raw bytes were searched, which a '
             'compressed stream hides. pip install "redact-suite[pymupdf]"'
+        )
+    if any(k.startswith("image:<no ocr>") for k in layers):
+        # An image's text is pixels. Searching the compressed bytes finds
+        # nothing whether or not an SSN is legible on screen, so "clean" here
+        # would be the same empty reassurance as a grep over base64.
+        report.control_entities = 0  # force INCONCLUSIVE
+        report.note = (
+            "text inside the image was NOT examined (no OCR engine) — a "
+            f'screenshot or scan can carry PII as pixels. {ocr_hint()}'
         )
 
     seen = set()

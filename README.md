@@ -33,6 +33,7 @@ each document to the tool that fits.
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
+| **ocr** | image | **Redacts text that is pixels** — screenshots, scans, photos of documents. Reads the image and covers the regions carrying PII. One pip install, no system binary. | `pip install "redact-suite[ocr]"` |
 | **deface** | image, video | [deface](https://github.com/ORB-HD/deface) — CNN face blurring. Model ships in the wheel, so detection is fully offline; video needs no system ffmpeg. **Faces only.** | `pip install "redact-suite[deface]"` |
 | **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — faces **and license plates**. ⚠️ Unmaintained since 2019 and pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it will not install on a current interpreter. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`) |
 
@@ -362,6 +363,33 @@ Two limits worth stating plainly:
 | `--match` | only redact visual files matching this description |
 | `--match-threshold` | calibrated score a `--match` must reach (0-1, default `0.05`) |
 | `--no-recursive` | do not walk directories recursively |
+
+### Text that is pixels
+
+A screenshot of a record, a phone photo of a form, a scanned page — the
+characters are pixels, so a text search finds nothing whether or not an SSN is
+plainly legible. The suite used to report those clean:
+
+```
+[ok] screenshot.png via deface (image): 0 entities | 0 face(s) blurred   # exit 0
+```
+
+Now the face backends declare what they did not look at, and `-b ocr` redacts it:
+
+```bash
+redact run screenshot.png                 # blurs faces, WARNS about legible text, exits 1
+redact run screenshot.png -b ocr          # covers the regions carrying PII
+```
+
+`redact verify` reads images through OCR too, so a leak in pixels is caught —
+and without the `[ocr]` extra it reports **INCONCLUSIVE** rather than clean,
+because it could not read the format it was handed.
+
+Two things worth knowing. Redaction covers the whole recognised **line**, not the
+exact characters: mapping a span back to pixels means guessing glyph widths, and
+over-redaction is the safe direction. And OCR costs roughly **0.4s per image**,
+so a thousand-image batch takes about seven minutes longer — the price of not
+reporting a legible SSN as clean.
 
 ## Verifying the output
 

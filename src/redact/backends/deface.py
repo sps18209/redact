@@ -28,6 +28,7 @@ import importlib.util
 from pathlib import Path
 from typing import List
 
+from .. import ocr
 from ..document import Document, output_path
 from ..types import (
     Entity,
@@ -109,6 +110,15 @@ class DefaceBackend(Backend):
             else:
                 result.entities = _blur_image(document.path, out, options.threshold, replacewith)
                 result.message = f"{len(result.entities)} face(s) {verb}"
+                # This backend finds faces. An image can also carry PII as
+                # *pixels of text* — a screenshot of a record, a photo of a
+                # form — which it neither sees nor touches. Reporting a clean
+                # run over a legible SSN is the failure this suite exists to
+                # prevent, so say what was not examined.
+                note = ocr.unexamined_note(document.path, options.entities, options.threshold)
+                if note:
+                    result.unredacted.append(note)
+                    result.message += f" | WARNING: {note}"
         except Exception as exc:  # model/IO/codec failures must not abort a batch
             result.success = False
             result.message = f"deface failed: {exc}"

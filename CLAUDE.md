@@ -58,6 +58,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
 | `src/redact/router.py` | `select_backend` / `candidates` — the selection policy. |
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
+| `src/redact/ocr.py` | OCR helper: reads text out of images (rapidocr), restores word boundaries the engine ran together, and supplies `unexamined_note` — the sentence a backend puts in `unredacted` when it did not look. |
+| `src/redact/backends/ocr.py` | Redacts PII rendered as pixels: OCR the image, cover the regions carrying PII. Priority 30, below the face detectors, so `auto` still blurs faces in a photo. |
 | `src/redact/verify.py` | `redact verify` — reopens a finished artifact, decodes every layer (zip parts, base64, PDF text), and re-scans for PII. Independent of the backend that wrote it. |
 | `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `verify` / `search`. |
 | `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
@@ -76,6 +78,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `yolo` | image, video | 65 | `ultralytics` + `opencv-python`. Open-vocabulary (YOLO-World) by default, so classes are text prompts — **the only working license-plate path**. Below deface on purpose: deface is the better *face* detector, so `auto` keeps it. |
 | `deface` | image, video | 70 | `deface` (pip). Bundled CenterFace ONNX model + static ffmpeg, so fully offline. **Faces only — no license plates.** |
 | `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`). **Legacy**: pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it does not install on current Python. Kept solely because it is the only backend covering **license plates**. Not the PyPI `anonymizer` package — that's unrelated. |
+| `ocr` | image | 30 | `rapidocr-onnxruntime` + `pillow`. **The only path for PII that is pixels** — screenshots, scans. Below the face detectors on purpose. |
 | `pdf-redact-tools` | pdf | 40 | `pdf-redact-tools` on PATH |
 
 Priority orders auto-selection: purpose-built tools outrank the builtin fallback.
@@ -332,6 +335,24 @@ python -m redact list                 # module entry point equivalent
 - **`iter_documents(..., include_outputs=True)` exists for `verify` alone.**
   Ingestion skips `.redacted.` files to keep batches idempotent; verification's
   entire input *is* those files. Never set it in a path that redacts.
+- **An image can carry PII as pixels, and saying nothing about it is lying.** A
+  screenshot of a record went through `deface` as `0 entities, 0 face(s)
+  blurred`, exit 0, and `verify` called it `clean` — both look for text and the
+  characters were pixels. `deface` now appends `ocr.unexamined_note(...)` to
+  `unredacted`, and `verify` adds an `image:ocr` layer (INCONCLUSIVE without the
+  engine, never `clean`). Any new image/video backend must do the same: it finds
+  what it finds, and must declare the rest.
+- **OCR loses spaces, and `\b`-anchored patterns then miss the value.** The
+  engine reads "SSN 078-05-1120" as "SSN078-05-1120"; there is no word boundary
+  between "N" and "0", so the SSN — the most sensitive thing in the image — went
+  undetected while the email was found. `ocr.boundary_restored` reinserts a
+  space at letter/digit transitions, and both variants are scanned and unioned
+  (the split can equally break an ID like "AB12CD34"). Caught by testing the
+  output, not by reading the regex.
+- **The OCR honesty check costs ~0.4s per image** (~7 min per 1000), because
+  every image redaction now also reads the image. That is deliberate and must
+  not be turned into an off-by-default flag: the alternative is reporting a
+  legible SSN as clean. It is why the test suite takes ~2 min rather than ~15s.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install
