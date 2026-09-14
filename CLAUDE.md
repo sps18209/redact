@@ -66,8 +66,8 @@ CLI, and every adapter are decoupled from any specific tool.
 
 | Name | Media types | Priority | Requires |
 |---|---|---|---|
-| `builtin` | text, structured, docx, xlsx | 10 | nothing (stdlib) |
-| `presidio` | text, structured, docx, xlsx | 80 | `presidio-analyzer`, `presidio-anonymizer` + spaCy model |
+| `builtin` | text, structured, docx, xlsx, pptx, eml | 10 | nothing (stdlib) |
+| `presidio` | text, structured, docx, xlsx, pptx, eml | 80 | `presidio-analyzer` + a spaCy model (`en_core_web_lg`). **Not** `presidio-anonymizer`: this suite uses Presidio for detection only and does its own rewriting, so requiring it would be a lie — see the note below and the `[presidio]` extra. |
 | `philter` | text, structured | 70 | running Philter service (`PHILTER_ENDPOINT`) |
 | `redactai` | pdf, text | 60 | `pypdf` + running Ollama (`OLLAMA_HOST`) |
 | `yolo` | image, video | 65 | `ultralytics` + `opencv-python`. Open-vocabulary (YOLO-World) by default, so classes are text prompts — **the only working license-plate path**. Below deface on purpose: deface is the better *face* detector, so `auto` keeps it. |
