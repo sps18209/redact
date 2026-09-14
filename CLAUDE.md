@@ -61,6 +61,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/ocr.py` | OCR helper: reads text out of images (rapidocr), restores word boundaries the engine ran together, and supplies `unexamined_note` — the sentence a backend puts in `unredacted` when it did not look. |
 | `src/redact/backends/ocr.py` | Redacts PII rendered as pixels: OCR the image, cover the regions carrying PII. Priority 30, below the face detectors, so `auto` still blurs faces in a photo. |
 | `src/redact/verify.py` | `redact verify` — reopens a finished artifact, decodes every layer (zip parts, base64, PDF text), and re-scans for PII. Independent of the backend that wrote it. |
+| `src/redact/report.py` | JSON payloads for `run`/`verify` (`--json`). Versioned schema; **withholds detected values by default** so the report does not become a fresh copy of the PII. |
 | `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `verify` / `search`. |
 | `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
 | `.github/workflows/ci.yml` | Fast CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
@@ -353,6 +354,17 @@ python -m redact list                 # module entry point equivalent
   every image redaction now also reads the image. That is deliberate and must
   not be turned into an off-by-default flag: the alternative is reporting a
   legible SSN as clean. It is why the test suite takes ~2 min rather than ~15s.
+- **A JSON report must not become the leak.** `Entity.text` is the SSN itself,
+  and a machine-readable log listing every hit is a fresh copy of exactly what
+  the run removed — in a file nobody treats as sensitive. `report.py` omits
+  values unless `--json-include-values`, states which mode produced the payload
+  (`contains_pii_values`), and warns on write when values are in. Keep
+  `entity_counts` so a withheld report is still useful. Never make values the
+  default "because it is more informative".
+- **`--json -` moves the human lines to stderr.** Mixing prose into stdout makes
+  the JSON unparseable, which defeats the point of offering it; `_human_stream`
+  decides. Reporting is also wrapped so an unwritable path cannot change a run's
+  exit code — the redaction already happened.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

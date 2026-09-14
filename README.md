@@ -14,6 +14,54 @@ the suite works out of the box and every heavy tool is opt-in.
 └──────────┘                                          └──────────────────────────────┘
 ```
 
+## Quickstart
+
+```bash
+git clone https://github.com/sps18209/redact.git && cd redact
+pip install -e ".[all]"          # or pick extras below
+redact list                      # what's available, and how to get what isn't
+```
+
+Then the whole workflow is two commands:
+
+```bash
+redact run ./inbox -o ./clean                 # 1. redact
+redact verify ./clean --original ./inbox      # 2. prove it
+```
+
+Don't skip step 2 — it reopens the finished files and decodes every layer (zip
+parts, base64, PDF text, image pixels) looking for what survived. `--original`
+turns on the positive control: if the scan can't find PII in your *source*, it
+reports `INCONCLUSIVE` instead of `clean`, because a clean result would mean
+nothing.
+
+**Read the exit code, not the prose:**
+
+| Exit | Means | Do |
+|---|---|---|
+| `0` | Safe | Ship it |
+| `1` + `left content unredacted` | Worked, but knowingly left something (kept email attachment, scanned page, text in an image) | Read the warning — it names the fix |
+| `1` + `failed` | Couldn't process (missing backend, unreadable file, typo) | Read the message — it names what to install |
+
+Exit `0` always means the output is safe. That is enforced, not aspirational.
+
+**Install only what your material needs:**
+
+| You handle | Install |
+|---|---|
+| Text, CSV, Word, Excel, PowerPoint, email | `pip install -e .` — zero dependencies |
+| …plus names and addresses, not just patterns | `pip install -e ".[presidio]"` then `python -m spacy download en_core_web_lg` |
+| PDFs | `pip install -e ".[pymupdf]"` |
+| Screenshots, scans, photos of documents | `pip install -e ".[ocr]"` |
+| Faces in photos/video | `pip install -e ".[deface]"` |
+| License plates, or anything you can name | `pip install -e ".[yolo]"` |
+
+**Three things that will bite you.** A scan or screenshot carries PII as pixels —
+you'll get a warning and exit 1; fix with `-b ocr`. An email's binary attachment
+can't be redacted in place — `--eml-attachments strip` drops it. And the built-in
+engine is pattern-only (email, phone, SSN, card, IBAN, IP, URL); it will never
+catch "Jane Doe" — that needs Presidio.
+
 ## Why
 
 The redaction ecosystem is fragmented: Presidio is great for text, deface blurs
@@ -436,6 +484,40 @@ Exit codes: `0` clean, `1` leaking **or** inconclusive. A clean report means "no
 PII this engine recognises, in any layer it can reach" — never "safe to
 publish". Text burned into an image, an identifier it doesn't know, or an
 inference from surrounding context all survive it.
+
+## Machine-readable output
+
+Every `run` and `verify` can emit JSON for a pipeline — or for a model asked
+"what did this run find?" — instead of prose that has to be parsed:
+
+```bash
+redact run ./inbox -o ./clean --json report.json
+redact run ./inbox -o ./clean --json -  | jq '.summary.all_safe'
+redact verify ./clean --json -          | jq '.summary.all_verified_clean'
+```
+
+With `--json -` the JSON owns stdout and the human lines move to stderr, so it
+pipes cleanly. Each payload is versioned (`schema`, `schema_version`,
+`tool_version`) — check it and refuse what you don't recognise.
+
+Two fields carry the decision:
+
+- `summary.all_safe` — every document redacted with nothing knowingly left
+- `documents[].fully_redacted` — per document. **Not the same as `success`:** a
+  run can succeed while declaring a kept attachment or an unexamined scan, and
+  that distinction is the one automation must branch on.
+
+**The report withholds the values it found.** `entity.text` *is* the SSN — a
+report listing them is a fresh copy of what you just removed, in a file nobody
+treats as sensitive. So you get types, counts and locations:
+
+```json
+{ "type": "US_SSN", "score": 0.85, "start": 4, "end": 15, "bbox": null }
+```
+
+`--json-include-values` opts in when you genuinely need to see what was hit. The
+payload then says `"contains_pii_values": true` and the CLI warns you that the
+file is now as sensitive as the source documents.
 
 ## Library
 

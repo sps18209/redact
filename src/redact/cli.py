@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from . import report
 from .document import iter_documents, unmatched_inputs
 from .suite import RedactionSuite
 from .types import RedactionMode, RedactionOptions
@@ -58,6 +59,17 @@ def build_parser() -> argparse.ArgumentParser:
         "-e", "--entities", action="append", default=None, metavar="LABEL[,LABEL]",
         help="restrict detection to these entity labels; repeat the flag or "
         "comma-separate, e.g. -e EMAIL_ADDRESS,US_SSN (default: all)",
+    )
+    p_run.add_argument(
+        "--json", default=None, metavar="PATH",
+        help="also write a machine-readable JSON report here ('-' for stdout). "
+        "Detected values are omitted unless --json-include-values is given",
+    )
+    p_run.add_argument(
+        "--json-include-values", action="store_true",
+        help="include the detected PII values in the JSON report. The report is "
+        "then as sensitive as the source documents — off by default so a log "
+        "file does not become a fresh copy of what you just removed",
     )
     p_run.add_argument(
         "--hash-key", default=None, metavar="KEY",
@@ -134,6 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument(
         "--threshold", type=float, default=0.35,
         help="minimum confidence to report (default: 0.35)",
+    )
+    p_verify.add_argument(
+        "--json", default=None, metavar="PATH",
+        help="also write a machine-readable JSON report here ('-' for stdout)",
+    )
+    p_verify.add_argument(
+        "--json-include-values", action="store_true",
+        help="include the surviving PII values in the JSON report (sensitive)",
     )
     p_verify.add_argument(
         "--no-recursive", action="store_true", help="do not walk directories recursively"
@@ -242,6 +262,31 @@ def _yolo_extra(args: argparse.Namespace) -> dict:
     return extra
 
 
+def _human_stream(args: argparse.Namespace):
+    """Where the per-document lines go.
+
+    With ``--json -`` the JSON owns stdout, so the prose moves to stderr and
+    `redact run ... --json - | jq` actually works. Mixing them makes the machine
+    output unparseable, which defeats the point of offering it.
+    """
+    return sys.stderr if getattr(args, "json", None) == "-" else sys.stdout
+
+
+def _emit_json(args: argparse.Namespace, build) -> None:
+    """Write the JSON report if one was asked for.
+
+    Built lazily and guarded: a reporting failure must never change the outcome
+    of a redaction that already happened, nor mask its exit code.
+    """
+    destination = getattr(args, "json", None)
+    if not destination:
+        return
+    try:
+        report.write(build(), destination)
+    except OSError as exc:
+        print(f"could not write JSON report: {exc}", file=sys.stderr)
+
+
 def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
     options = RedactionOptions(
         backend=args.backend,
@@ -279,13 +324,15 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
     total = 0
     failures = 0
     incomplete = 0
+    collected = []
     for result in (suite.redact_document(doc, options) for doc in documents):
         total += 1
         if not result.success:
             failures += 1
         elif result.unredacted:
             incomplete += 1
-        print(result.summary())
+        collected.append(result)
+        print(result.summary(), file=_human_stream(args))
 
     _report_skipped(skipped, args.include_unknown)
     if total == 0:
@@ -306,7 +353,11 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
             "treat this as a clean run.",
             file=sys.stderr,
         )
-    return 1 if (failures or incomplete) else 0
+    code = 1 if (failures or incomplete) else 0
+    _emit_json(args, lambda: report.run_report(
+        collected, include_values=args.json_include_values, exit_code=code,
+    ))
+    return code
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
@@ -334,19 +385,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     entities = _parse_entities(args.entities)
     leaking = inconclusive = 0
+    collected = []
     for doc in documents:
         origin = None
         if source_dir is not None:
             candidate = source_dir / doc.path.name.replace(".redacted", "", 1)
             origin = candidate if candidate.exists() else None
-        report = verify_path(
+        result = verify_path(
             doc.path, entities=entities, threshold=args.threshold, original=origin
         )
-        if not report.clean:
+        if not result.clean:
             leaking += 1
-        elif report.inconclusive:
+        elif result.inconclusive:
             inconclusive += 1
-        print(report.summary())
+        collected.append(result)
+        print(result.summary(), file=_human_stream(args))
 
     _report_skipped(skipped, True)
     total = len(documents)
@@ -362,15 +415,17 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             "safe to share.",
             file=sys.stderr,
         )
-        return 1
-    if inconclusive:
+    elif inconclusive:
         print(
             f"{inconclusive} artifact(s) could not be meaningfully checked (the "
             "positive control found nothing in the original). Treat as unverified.",
             file=sys.stderr,
         )
-        return 1
-    return 0
+    code = 1 if (leaking or inconclusive) else 0
+    _emit_json(args, lambda: report.verify_report(
+        collected, include_values=args.json_include_values, exit_code=code,
+    ))
+    return code
 
 
 def _cmd_search(args: argparse.Namespace) -> int:
