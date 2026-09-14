@@ -6,11 +6,15 @@ in the router. The heavy imports happen lazily inside ``redact``/discovery so
 that merely importing this module never pulls in spaCy.
 
 Install with:  ``pip install "redact-suite[presidio]"`` then
-``python -m spacy download en_core_web_lg``. Model choice changes *labels* in
-both directions rather than being strictly better — ``en_core_web_lg`` tags
-"maria.g@clinic.example" as a PERSON where ``en_core_web_sm`` correctly says
-EMAIL_ADDRESS — which is why the deterministic recognizers below win exact span
-collisions.
+``python -m spacy download en_core_web_lg``. A model's labels are guesses, not
+facts, which is why the deterministic recognizers below win exact span
+collisions. Re-measured against the real library (``tests/test_presidio_real.py``):
+for "Email maria.g@clinic.example today" *both* ``en_core_web_sm`` and
+``en_core_web_lg`` return PERSON over span (0,28) — the address *plus* the
+literal word "Email" — and neither ever emits EMAIL_ADDRESS. Because that span
+strictly contains the regex's (6,28), the exact-span rule cannot fire and
+longest-wins keeps PERSON. The address is still redacted (over-redaction is the
+safe direction) but the reported label varies with surrounding context.
 
 Presidio supplies *detection* only; the suite's own operators do the rewriting,
 so redaction modes behave identically across every backend and media type.
@@ -157,12 +161,13 @@ def _analyze(analyzer, text: str, options: RedactionOptions) -> List[Entity]:
     ]
     deterministic = detect_entities(text, options.entities, options.threshold)
 
-    # On an *exact* span collision the deterministic label wins. A validated
-    # regex match is a fact; the model's label is a guess, and which guess you
-    # get depends on the model: measured here, en_core_web_sm calls
-    # "maria.g@clinic.example" an EMAIL_ADDRESS while en_core_web_lg calls the
-    # same span a PERSON. Both redact it, but a label that flips with the model
-    # makes reports and ``-e`` filtering unreliable.
+    # On an *exact* span collision the deterministic label wins: a validated
+    # regex match is a fact, the model's label is a guess. This covers only
+    # *equal* spans. When a model span strictly contains a regex span (measured:
+    # PERSON over "Email maria.g@clinic.example") longest-wins keeps the model's
+    # label instead — the text is still redacted, so the safety property holds,
+    # but the label is context-dependent. ``-e`` is unaffected because both
+    # detectors are filtered by options.entities before they collide.
     exact = {(e.start, e.end) for e in deterministic}
     found = [e for e in found if (e.start, e.end) not in exact]
     found.extend(deterministic)

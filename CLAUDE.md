@@ -198,12 +198,28 @@ python -m redact list                 # module entry point equivalent
 - **Every rewrite path resolves overlapping spans** (`opc.resolve_overlaps`).
   Presidio reports one email as an EMAIL_ADDRESS *and* two URLs inside it;
   rewriting naively interleaves them into `<EMAIL_ADDRESS><URL>e@<URL>`.
-- **Deterministic labels win exact span collisions** in `_analyze`. NER labels
-  are model-dependent in both directions — `en_core_web_lg` calls
-  `maria.g@clinic.example` a PERSON while `en_core_web_sm` correctly calls it an
-  EMAIL_ADDRESS — so a bigger model is not simply better. Both redact the span;
-  pinning the label to the verified regex keeps reports and `-e` filtering
-  stable across model choices.
+- **Deterministic labels win *exact* span collisions** in `_analyze` — a
+  validated regex match is a fact, a model label is a guess. Know the limit:
+  the rule keys on span equality, so it does nothing when a model span strictly
+  *contains* a regex span. Re-measured against the real library (an earlier note
+  here claimed `en_core_web_sm` returns EMAIL_ADDRESS for
+  `maria.g@clinic.example` and only `en_core_web_lg` returns PERSON — that is
+  **false**): for "Email maria.g@clinic.example today" *both* models return
+  PERSON over (0,28), covering the address plus the literal word "Email", and
+  neither ever emits EMAIL_ADDRESS. Longest-wins therefore keeps PERSON. The
+  address is still redacted — over-redaction is the safe direction — but the
+  reported label depends on surrounding context. `-e` is unaffected: both
+  detectors are filtered by `options.entities` before the collision. Pinned by
+  `tests/test_presidio_real.py`; don't restate model behaviour here without
+  re-measuring.
+- **Real-Presidio behaviour is pinned by `tests/test_presidio_real.py`**, gated
+  behind `REDACT_TEST_PRESIDIO=1` and run by `heavy.yml`. The fakes prove the
+  adapter's plumbing; only these prove the *model* claims this design rests on —
+  that Presidio misses `SSN\t123-45-6789` (verified for both `sm` and `lg`, so
+  the union is genuinely load-bearing) and that it finds PERSON names the regex
+  engine structurally cannot. Those claims were one-off measurements that had
+  never been re-run, and one had drifted. Measurements in comments rot; put them
+  in a test.
 - Presidio is not installed in CI. `tests/test_presidio_docx.py` injects fake
   `presidio_*` modules (with a `__spec__`, or `find_spec` won't see them) so the
   real adapter code is exercised; the fake detects `PERSON`, a label the builtin

@@ -62,5 +62,13 @@ jobs:
           assert not missing, f'presidio reported unavailable: {missing}'
           print('presidio available:', b.refresh_availability())
           "
+      # Availability is not behaviour. These exercise the real model: that it
+      # misses SSN\t123-45-6789 (so the deterministic union is load-bearing),
+      # that it finds PERSON names the regex engine cannot, and that a run
+      # ships nothing unredacted.
+      - name: Real-Presidio behaviour
+        env:
+          REDACT_TEST_PRESIDIO: "1"
+        run: pytest -q tests/test_presidio_real.py
       - name: Full suite
         run: pytest -q
