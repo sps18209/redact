@@ -114,6 +114,31 @@ def build_parser() -> argparse.ArgumentParser:
         "(0-1, default: 0.05); see 'redact search' to pick one",
     )
 
+    # verify
+    p_verify = sub.add_parser(
+        "verify",
+        help="re-scan redacted output for PII that survived (decodes every layer)",
+    )
+    p_verify.add_argument("inputs", nargs="+", help="redacted files, directories, or globs")
+    p_verify.add_argument(
+        "--original", default=None, metavar="DIR",
+        help="directory holding the SOURCE files. Enables the positive control: "
+        "if the same scan finds no PII in the original, a clean result is "
+        "reported INCONCLUSIVE rather than clean, because the check is blind "
+        "to that file",
+    )
+    p_verify.add_argument(
+        "-e", "--entities", action="append", default=None, metavar="LABEL[,LABEL]",
+        help="restrict the scan to these entity labels",
+    )
+    p_verify.add_argument(
+        "--threshold", type=float, default=0.35,
+        help="minimum confidence to report (default: 0.35)",
+    )
+    p_verify.add_argument(
+        "--no-recursive", action="store_true", help="do not walk directories recursively"
+    )
+
     # search
     p_search = sub.add_parser(
         "search", help="rank images/video by how well they match a description"
@@ -284,6 +309,70 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
     return 1 if (failures or incomplete) else 0
 
 
+def _cmd_verify(args: argparse.Namespace) -> int:
+    """Re-scan finished artifacts. Independent of whatever produced them."""
+    from .verify import verify_path
+
+    _report_inputs(args.inputs, not args.no_recursive)
+    skipped: List = []
+    # include_unknown: verification must look at everything handed to it. A
+    # file whose type we cannot name is exactly the one worth scanning.
+    documents = list(
+        iter_documents(
+            args.inputs, not args.no_recursive, True,
+            skipped=skipped, include_outputs=True,
+        )
+    )
+    if not documents:
+        print("no files to verify", file=sys.stderr)
+        return 1
+
+    source_dir = Path(args.original) if args.original else None
+    if source_dir and not source_dir.is_dir():
+        print(f"--original: not a directory: {source_dir}", file=sys.stderr)
+        return 2
+
+    entities = _parse_entities(args.entities)
+    leaking = inconclusive = 0
+    for doc in documents:
+        origin = None
+        if source_dir is not None:
+            candidate = source_dir / doc.path.name.replace(".redacted", "", 1)
+            origin = candidate if candidate.exists() else None
+        report = verify_path(
+            doc.path, entities=entities, threshold=args.threshold, original=origin
+        )
+        if not report.clean:
+            leaking += 1
+        elif report.inconclusive:
+            inconclusive += 1
+        print(report.summary())
+
+    _report_skipped(skipped, True)
+    total = len(documents)
+    print(
+        f"\n{total} artifact(s) verified, {leaking} leaking, {inconclusive} inconclusive.",
+        file=sys.stderr,
+    )
+    if leaking:
+        # The whole point of the verb: a leak must be impossible to miss in a
+        # script that only checks the exit code.
+        print(
+            f"{leaking} artifact(s) still contain detectable PII — they are NOT "
+            "safe to share.",
+            file=sys.stderr,
+        )
+        return 1
+    if inconclusive:
+        print(
+            f"{inconclusive} artifact(s) could not be meaningfully checked (the "
+            "positive control found nothing in the original). Treat as unverified.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def _cmd_search(args: argparse.Namespace) -> int:
     from .semantic import ClipEmbedder, SemanticError, SemanticIndex
 
@@ -343,6 +432,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     if args.command == "run":
         return _cmd_run(suite, args)
+    if args.command == "verify":
+        return _cmd_verify(args)
     if args.command == "search":
         return _cmd_search(args)
 

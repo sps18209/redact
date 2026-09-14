@@ -58,7 +58,8 @@ CLI, and every adapter are decoupled from any specific tool.
 | `src/redact/registry.py` | `BackendRegistry` — holds backend instances, lookups, availability. |
 | `src/redact/router.py` | `select_backend` / `candidates` — the selection policy. |
 | `src/redact/suite.py` | `RedactionSuite` — high-level entry point + batch. |
-| `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `search`. |
+| `src/redact/verify.py` | `redact verify` — reopens a finished artifact, decodes every layer (zip parts, base64, PDF text), and re-scans for PII. Independent of the backend that wrote it. |
+| `src/redact/cli.py` | `redact` CLI: `list` / `detect` / `run` / `verify` / `search`. |
 | `tests/` | pytest suite — ingestion, detection, routing, builtin, CLI, discovery, and audit regressions. |
 | `.github/workflows/ci.yml` | Fast CI: pytest on 3.9/3.11/3.12 + CLI smoke test. |
 | `.github/workflows/heavy.yml` | Weekly/dispatch CI that actually downloads models: runs the `REDACT_TEST_YOLO_WEIGHTS`/`REDACT_TEST_CLIP` gated tests, and proves the real Presidio library reports itself available. |
@@ -118,7 +119,7 @@ python -m redact list                 # module entry point equivalent
   document must populate `unredacted` rather than report a clean success —
   false assurance is worse than non-coverage, because it defeats the user's own
   verification of the output.
-- Keep the CLI's three verbs (`list`/`detect`/`run`) thin — logic belongs in the
+- Keep the CLI's verbs (`list`/`detect`/`run`/`verify`/`search`) thin — logic belongs in the
   suite/router/backends, not `cli.py`.
 - **Ingestion never re-reads the suite's own outputs** (`document.is_redaction_output`)
   and skips hidden/junk dirs, so a batch is idempotent. Any new backend that
@@ -304,6 +305,20 @@ python -m redact list                 # module entry point equivalent
   hard-coded "no pdf backend in CI"; installing one turned a passing test red
   for the wrong reason. Assert the contract — the batch continues, the failure
   comes back as a result with a message and no output path.
+- **`verify` must decode before searching, and must not cry wolf.** It scans
+  every zip part (a leak in `customXml/` counts, even though nothing edits it),
+  every base64 payload and PDF text — the base64 case is the whole reason the
+  verb exists, since a user's `grep` cannot see it. Equally important: XML
+  namespace URLs are filtered (`_SCHEMA_HOSTS`), because flagging every Office
+  document teaches users to ignore the tool, and an ignored verifier is worse
+  than none. The filter matches *hosts*, so a real URL leak is still reported.
+- **Layer order in `extract_layers` is load-bearing.** Specific layers are
+  collected first and `raw` last, because a finding is attributed to the first
+  layer it appears in; an uncompressed zip entry also appears in the raw bytes,
+  and `US_SSN in zip:customXml/item1.xml` is actionable where `in raw` is not.
+- **`iter_documents(..., include_outputs=True)` exists for `verify` alone.**
+  Ingestion skips `.redacted.` files to keep batches idempotent; verification's
+  entire input *is* those files. Never set it in a path that redacts.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

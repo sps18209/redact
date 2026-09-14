@@ -363,6 +363,47 @@ Two limits worth stating plainly:
 | `--match-threshold` | calibrated score a `--match` must reach (0-1, default `0.05`) |
 | `--no-recursive` | do not walk directories recursively |
 
+## Verifying the output
+
+Redacting is half the job. `redact verify` reopens a finished artifact and looks
+for PII that survived — independently of whichever backend produced it, so a bug
+in any of them shows up here.
+
+```bash
+redact verify ./clean                      # re-scan everything you produced
+redact verify ./clean --original ./inbox   # …with the positive control (below)
+```
+
+It exists because of one specific failure. A user redacts a mailbox, greps the
+output for the SSN, gets nothing, and ships it — while the SSN sits in a base64
+attachment the grep was never able to read:
+
+```
+$ grep -c '078-05-1120' leak.eml
+0
+$ redact verify leak.eml
+[LEAKING] leak.eml (email) — 3 layer(s) | US_SSN in base64[0]: '078-05-1120'
+```
+
+**It decodes before searching.** Every zip part (not only the parts a backend
+edits — a leak in `customXml/` counts), every base64 payload, PDF text layers,
+then the raw bytes as a catch-all. Findings name the layer, so you know where to
+fix.
+
+**`--original` enables the positive control.** A scan that can't find PII in the
+*source* proves nothing about the redacted copy, so that case is reported
+`INCONCLUSIVE` rather than `clean`:
+
+```
+[INCONCLUSIVE] plain.redacted.txt — positive control found no PII in plain.txt
+— this engine cannot see into that file, so a clean result here proves nothing
+```
+
+Exit codes: `0` clean, `1` leaking **or** inconclusive. A clean report means "no
+PII this engine recognises, in any layer it can reach" — never "safe to
+publish". Text burned into an image, an identifier it doesn't know, or an
+inference from surrounding context all survive it.
+
 ## Library
 
 ```python

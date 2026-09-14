@@ -210,6 +210,7 @@ def iter_documents(
     recursive: bool = True,
     include_unknown: bool = False,
     skipped: Optional[List[Path]] = None,
+    include_outputs: bool = False,
 ) -> Iterator[Document]:
     """Yield :class:`Document` objects for every input.
 
@@ -219,13 +220,17 @@ def iter_documents(
 
     Files whose type resolves to :data:`MediaType.UNKNOWN` are skipped unless
     ``include_unknown`` is set; pass a list as ``skipped`` to find out which, so
-    a caller can tell the user rather than silently ignoring them. The suite's
-    own outputs (see :func:`is_redaction_output`) are always skipped.
+    a caller can tell the user rather than silently ignoring them.
+
+    The suite's own outputs (see :func:`is_redaction_output`) are skipped, which
+    is what makes a repeated batch idempotent. ``include_outputs`` opts out of
+    that, and exists for one caller: ``redact verify``, whose whole input *is*
+    the set of redacted artifacts. Leave it False for anything that redacts.
     """
     for raw in inputs:
         root, paths = _expand_input(raw, recursive)
         for path in paths:
-            if is_redaction_output(path):
+            if is_redaction_output(path) and not include_outputs:
                 continue
             mt = detect_media_type(path)
             if mt is MediaType.UNKNOWN and not include_unknown:
