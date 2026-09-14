@@ -59,7 +59,10 @@ def test_the_source_pdf_really_is_untouched(backend, pdf, tmp_path):
 def test_the_message_says_the_pdf_is_not_redacted(backend, pdf, tmp_path):
     res = _run(backend, pdf, MediaType.PDF, tmp_path)
     assert "NOT redacted" in res.message
-    assert "pdf-redact-tools" in res.message, "must name the backend that can"
+    # Must name a backend that actually works. This asserted pdf-redact-tools
+    # until it turned out to be unmaintained Python 2 that will not run
+    # unpatched — pointing a user there is a dead end, not a fix.
+    assert "pymupdf" in res.message, "must name a backend that can"
 
 
 def test_the_text_extract_is_still_produced_and_redacted(backend, pdf, tmp_path):

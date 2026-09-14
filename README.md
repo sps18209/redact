@@ -79,7 +79,7 @@ each document to the tool that fits.
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **pymupdf** | pdf | **True in-place PDF redaction** — removes text from the content stream (not a box drawn over it) and scrubs metadata. One pip install, no system dependencies. AGPL-3.0, opt-in. | `pip install "redact-suite[pymupdf]"` |
 | **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
-| **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. | `pdf-redact-tools` on `PATH` |
+| **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. ⚠️ **Unmaintained Python 2** — needs `2to3` plus a bytes/str fix before it runs at all, and ImageMagick/exiftool/poppler. Use `pymupdf` instead unless you specifically need flattening. | a *patched* `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
 | **ocr** | image | **Redacts text that is pixels** — screenshots, scans, photos of documents. Reads the image and covers the regions carrying PII. One pip install, no system binary. | `pip install "redact-suite[ocr]"` |
 | **deface** | image, video | [deface](https://github.com/ORB-HD/deface) — CNN face blurring. Model ships in the wheel, so detection is fully offline; video needs no system ffmpeg. **Faces only.** | `pip install "redact-suite[deface]"` |
@@ -342,7 +342,7 @@ redact run chart.pdf
 | Backend | What you actually get |
 |---|---|
 | **`pymupdf`** *(default for PDF)* | **True redaction.** The text is removed from the page's content stream and the metadata scrubbed. The document stays a document — still selectable, searchable, accessible. |
-| `pdf-redact-tools` | Flattens every page to an image. More thorough (it destroys content you never detected) but the result is a picture of a document: no text, no search, no screen reader. An explicit choice, not the automatic one. |
+| `pdf-redact-tools` | Flattens every page to an image. More thorough (it destroys content you never detected) but the result is a picture of a document: no text, no search, no screen reader. **Unmaintained Python 2 — it will not run unpatched**, so treat it as a last resort. |
 | `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
 
 Drawing black rectangles over text is not redaction — the characters stay in the

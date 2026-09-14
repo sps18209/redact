@@ -80,7 +80,7 @@ CLI, and every adapter are decoupled from any specific tool.
 | `deface` | image, video | 70 | `deface` (pip). Bundled CenterFace ONNX model + static ffmpeg, so fully offline. **Faces only — no license plates.** |
 | `anonymizer` | image, video | 60 | git checkout via `ANONYMIZER_HOME` (or `ANONYMIZER_BIN`). **Legacy**: pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it does not install on current Python. Kept solely because it is the only backend covering **license plates**. Not the PyPI `anonymizer` package — that's unrelated. |
 | `ocr` | image | 30 | `rapidocr-onnxruntime` + `pillow`. **The only path for PII that is pixels** — screenshots, scans. Below the face detectors on purpose. |
-| `pdf-redact-tools` | pdf | 40 | `pdf-redact-tools` on PATH |
+| `pdf-redact-tools` | pdf | 40 | a **patched** `pdf-redact-tools` on PATH. Upstream is unmaintained Python 2 (bare `print`, `0700` octal) and raises SyntaxError on any current interpreter, so `missing_dependencies` *probes* it rather than trusting `which`. |
 
 Priority orders auto-selection: purpose-built tools outrank the builtin fallback.
 The router only ever picks a backend that is *available right now*.
@@ -374,6 +374,18 @@ python -m redact list                 # module entry point equivalent
   re-probe) since a subprocess per call is too costly for the video paths. Guard
   tests on `ffmpeg_bin() is None`, never `shutil.which("ffmpeg") is None`, and
   invoke the *resolved* binary in test bodies — the bundled build is not on PATH.
+- **Availability must mean usability — now twice.** `shutil.which` finding a
+  binary proves nothing: a system ffmpeg whose libraries moved still resolves
+  (see `media.ffmpeg_bin`), and `pdf-redact-tools` is an unmaintained Python 2
+  script that resolves and then raises SyntaxError. Both now execute the
+  candidate before accepting it. Any future backend that shells out to a binary
+  must do the same, or `redact list` says `yes` and the router hands it work it
+  cannot do. Both were found by someone installing every extra on a real
+  machine, not by the test suite.
+- **Don't recommend a tool that will not run.** `pymupdf`'s scanned-page warning
+  and `redactai`'s message both pointed users at `pdf-redact-tools` as the fix;
+  following that advice lands on a SyntaxError. The messages now say what it
+  costs, and `redactai` points at `pymupdf` instead.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

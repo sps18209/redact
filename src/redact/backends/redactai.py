@@ -162,7 +162,7 @@ class RedactAIBackend(Backend):
             result.message = (
                 f"PDF NOT redacted — wrote a redacted text extract ({out.name}) only; "
                 "the source PDF still contains every entity listed. Use the "
-                "pdf-redact-tools backend to flatten the PDF itself"
+                "pymupdf backend, which redacts the PDF itself"
             )
         else:
             result.message = "text redacted"

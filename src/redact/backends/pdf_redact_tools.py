@@ -24,15 +24,49 @@ from .base import Backend
 _BINARY = "pdf-redact-tools"
 
 
+def _runs(candidate: str) -> bool:
+    """True only if the binary actually executes.
+
+    Upstream stopped at Python 2, so what is on PATH is usually a script that
+    raises SyntaxError the moment an interpreter reads it.
+    """
+    try:
+        completed = subprocess.run(
+            [candidate, "--help"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 class PdfRedactToolsBackend(Backend):
     name = "pdf-redact-tools"
-    description = "pdf-redact-tools — strips PDF text layer & metadata by flattening to images."
+    description = (
+        "pdf-redact-tools — strips PDF text layer & metadata by flattening to "
+        "images. Unmaintained Python 2; needs patching to run at all."
+    )
     supported_media_types = (MediaType.PDF,)
-    install_hint = "install pdf-redact-tools (https://github.com/firstlookmedia/pdf-redact-tools)"
+    install_hint = (
+        "unmaintained Python 2 script: needs 2to3 plus a bytes/str fix in "
+        "check_output before it runs, and ImageMagick, exiftool and poppler "
+        'installed. Prefer pip install "redact-suite[pymupdf]"'
+    )
     priority = 40
 
     def missing_dependencies(self) -> List[str]:
-        return [] if shutil.which(_BINARY) else [_BINARY]
+        found = shutil.which(_BINARY)
+        if not found:
+            return [_BINARY]
+        if not _runs(found):
+            # Being on PATH is not being usable — the same trap as a system
+            # ffmpeg whose libraries moved. Upstream is an unmaintained Python 2
+            # script (bare `print`, `0700` octal literals), so on any current
+            # interpreter it raises SyntaxError before doing anything. Reporting
+            # "available" would list it as ready and let the router hand it a
+            # document it cannot process.
+            return [f"{_BINARY} (found, but it does not run — see the hint below)"]
+        return []
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
         if self.missing_dependencies():

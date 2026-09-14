@@ -68,3 +68,39 @@ def test_all_extra_covers_every_pip_installable_backend():
         for pkg in re.findall(r'"([^"]+)"', extras[name]):
             root = pkg.split()[0].split(">=")[0].split("==")[0]
             assert root in all_pkgs, f"[all] is missing {root} (from [{name}])"
+
+
+# -- availability must mean usability -----------------------------------------
+
+def test_pdf_redact_tools_on_path_but_unrunnable_is_not_available(monkeypatch, tmp_path):
+    """Reported from a real machine: upstream is an unmaintained Python 2 script
+    (bare `print`, `0700` octal literals), so it is on PATH and raises
+    SyntaxError the moment an interpreter reads it. Trusting `which` would list
+    it as ready and let the router hand it a document it cannot process."""
+    from redact.backends import pdf_redact_tools as mod
+
+    script = tmp_path / "pdf-redact-tools"
+    script.write_text("print 'python 2'\n")  # SyntaxError on any python3
+    script.chmod(0o755)
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: str(script))
+    missing = mod.PdfRedactToolsBackend().missing_dependencies()
+    assert missing, "a script that cannot run is not an available backend"
+    assert "does not run" in missing[0]
+
+
+def test_pdf_redact_tools_that_runs_is_available(monkeypatch):
+    from redact.backends import pdf_redact_tools as mod
+
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/true")
+    monkeypatch.setattr(mod, "_runs", lambda c: True)
+    assert mod.PdfRedactToolsBackend().missing_dependencies() == []
+
+
+def test_its_install_hint_warns_rather_than_sending_you_at_a_dead_end():
+    """The hint used to read like an ordinary install. Following it lands on a
+    SyntaxError."""
+    from redact.backends.pdf_redact_tools import PdfRedactToolsBackend
+
+    hint = PdfRedactToolsBackend.install_hint.lower()
+    assert "python 2" in hint and "pymupdf" in hint

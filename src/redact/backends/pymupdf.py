@@ -26,7 +26,8 @@ clean run over a document that still carries PII:
   extraction is empty, so detection finds nothing and the run would otherwise
   look spotless. Those pages are reported too — "no text layer" means "this
   tool could not read it", never "there is nothing here". Flatten such a file
-  with ``-b pdf-redact-tools``, or OCR it first.
+  by OCRing it first, or with ``-b pdf-redact-tools`` (unmaintained
+  Python 2, so it needs patching before it runs at all).
 
 Licence note: PyMuPDF is AGPL-3.0 (or commercial), like ``ultralytics``. It is
 an opt-in extra, never a hard dependency of this MIT-licensed suite.
@@ -202,6 +203,7 @@ def _summary(
         pages = ", ".join(str(p) for p in imageonly)
         notes.append(
             f"WARNING: page(s) {pages} carry images but no text layer — a scan reads as "
-            "'nothing found'. OCR it, or flatten with -b pdf-redact-tools"
+            "'nothing found'. OCR the file first, or flatten it with -b "
+            "pdf-redact-tools (unmaintained Python 2 — see its install hint)"
         )
     return " | ".join([head] + notes)
