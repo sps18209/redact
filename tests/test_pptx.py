@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from redact import RedactionOptions
-from redact.backends.builtin import BuiltinBackend
+from redact.backends.builtin import MASK_WIDTH, BuiltinBackend
 from redact.document import Document, detect_media_type
 from redact.pptx import PptxError, extract_text
 from redact.types import MediaType, RedactionMode
@@ -210,7 +210,7 @@ def test_mask_mode_and_entity_filter(tmp_path, pptx):
     res = _redact(pptx, tmp_path, mode=RedactionMode.MASK, entities=["EMAIL_ADDRESS"])
     with zipfile.ZipFile(res.output_path) as zf:
         assert b"123-45-6789" in zf.read("ppt/notesSlides/notesSlide1.xml")  # filtered out
-        assert "*" * len("jane.doe@example.com") in _texts(zf, "ppt/slides/slide1.xml")
+        assert "*" * MASK_WIDTH in _texts(zf, "ppt/slides/slide1.xml")  # fixed width
 
 
 def test_dry_run_writes_nothing(tmp_path, pptx):

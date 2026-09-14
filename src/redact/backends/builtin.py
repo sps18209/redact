@@ -13,6 +13,7 @@ adapter augments its model output with these deterministic patterns).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 from typing import List, Optional
 
@@ -136,12 +137,29 @@ def _dedupe_overlaps(entities: List[Entity]) -> List[Entity]:
     return resolve_overlaps(entities)
 
 
+#: Width of a MASK replacement. Fixed on purpose: `mask_char * len(original)`
+#: reproduces the original's length, which distinguishes a 7-digit number from
+#: a 10-digit one and a short surname from a long one. Redaction must not leak
+#: the size of what it removed.
+MASK_WIDTH = 8
+
+
 def replacement_for(entity: Entity, options: RedactionOptions) -> str:
     original = entity.text or ""
     if options.mode is RedactionMode.MASK:
-        return options.mask_char * max(len(original), 1)
+        return options.mask_char * MASK_WIDTH
     if options.mode is RedactionMode.HASH:
-        digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:12]
+        # Keyed HMAC, not a bare digest. PII is drawn from small spaces — an
+        # SSN is 10^9 values, a phone ~10^10 — so an unkeyed sha256 of one is
+        # invertible by enumeration in seconds, whatever the digest is
+        # truncated to. The key makes the candidate set uncomputable.
+        #
+        # Equality still survives by design (that is what a pseudonym is for),
+        # so token frequency mirrors value frequency. HASH is pseudonymisation,
+        # not anonymisation; use REPLACE or REDACT when linkage is not wanted.
+        digest = hmac.new(
+            options.hash_material(), original.encode("utf-8"), hashlib.sha256
+        ).hexdigest()[:12]
         return f"<{entity.entity_type}:{digest}>"
     if options.mode is RedactionMode.REDACT:
         return ""

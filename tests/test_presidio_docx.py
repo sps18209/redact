@@ -17,6 +17,7 @@ from importlib.machinery import ModuleSpec
 import pytest
 
 from redact import RedactionOptions, RedactionSuite
+from redact.backends.builtin import MASK_WIDTH
 from redact.backends.presidio import PresidioBackend
 from redact.document import Document
 from redact.types import MediaType, RedactionMode
@@ -130,7 +131,7 @@ def test_presidio_docx_honours_mask_mode(fake_presidio, tmp_path, docx):
     assert res.success
     with zipfile.ZipFile(res.output_path) as zf:
         texts = [t.text for t in ET.fromstring(zf.read("word/document.xml")).iter(f"{{{W_NS}}}t")]
-    assert "*" * len("new text") in texts
+    assert "*" * MASK_WIDTH in texts
 
 
 def test_presidio_docx_honours_image_policy(fake_presidio, tmp_path, docx):

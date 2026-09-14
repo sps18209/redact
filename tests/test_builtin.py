@@ -1,3 +1,5 @@
+import re
+
 from redact.backends.builtin import (
     BuiltinBackend,
     apply_redactions,
@@ -51,12 +53,15 @@ def test_apply_mask_mode():
     assert "*" in out
 
 
-def test_apply_hash_mode_is_stable():
-    text = "a@b.com"
+def test_apply_hash_mode_is_stable_within_a_run():
+    text = "mail a@b.com twice: a@b.com"
     ents = detect_entities(text)
-    o1 = apply_redactions(text, ents, RedactionOptions(mode=RedactionMode.HASH))
-    o2 = apply_redactions(text, ents, RedactionOptions(mode=RedactionMode.HASH))
-    assert o1 == o2 and "a@b.com" not in o1
+    opts = RedactionOptions(mode=RedactionMode.HASH)
+    out = apply_redactions(text, ents, opts)
+    assert "a@b.com" not in out
+    # the same value must agree with itself inside one run
+    tokens = re.findall(r"<EMAIL_ADDRESS:[0-9a-f]+>", out)
+    assert len(tokens) == 2 and tokens[0] == tokens[1]
 
 
 def test_backend_writes_output(tmp_path):

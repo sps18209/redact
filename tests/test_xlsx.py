@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from redact import RedactionOptions
-from redact.backends.builtin import BuiltinBackend
+from redact.backends.builtin import MASK_WIDTH, BuiltinBackend
 from redact.document import Document, detect_media_type
 from redact.types import MediaType, RedactionMode
 from redact.xlsx import XlsxError, extract_text
@@ -255,7 +255,7 @@ def test_mask_mode_and_entity_filter(tmp_path, xlsx):
     )
     with zipfile.ZipFile(res.output_path) as zf:
         strings = _shared(zf)
-    assert strings[1] == "*" * len("jane.doe@example.com")
+    assert strings[1] == "*" * MASK_WIDTH  # fixed width: length must not leak
     assert strings[2] == "123-45-6789"  # SSN untouched by the filter
 
 

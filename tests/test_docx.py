@@ -8,7 +8,7 @@ import pytest
 
 from redact import RedactionOptions, RedactionSuite
 from redact.backends.base import Backend
-from redact.backends.builtin import BuiltinBackend
+from redact.backends.builtin import MASK_WIDTH, BuiltinBackend
 from redact.document import Document, detect_media_type, output_path
 from redact.docx import DocxError, extract_text
 from redact.types import MediaType, RedactionMode, RedactionResult
@@ -180,7 +180,7 @@ def test_mask_mode_and_entity_filter(tmp_path, docx):
     assert {e.entity_type for e in res.entities} == {"EMAIL_ADDRESS"}  # no author scrub when filtered
     with zipfile.ZipFile(res.output_path) as zf:
         texts = run_texts(zf.read("word/document.xml"))
-        assert texts[1] == "*" * len("jane.doe@example.com")
+        assert texts[1] == "*" * MASK_WIDTH  # fixed width: length must not leak
         assert "123-45-6789" in texts  # SSN untouched by filter
         assert b"Jane Doe" in zf.read("docProps/core.xml")
 

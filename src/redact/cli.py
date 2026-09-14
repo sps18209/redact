@@ -59,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="restrict detection to these entity labels; repeat the flag or "
         "comma-separate, e.g. -e EMAIL_ADDRESS,US_SSN (default: all)",
     )
+    p_run.add_argument(
+        "--hash-key", default=None, metavar="KEY",
+        help="key for -m hash. Same key + same value = same pseudonym, so "
+        "records stay correlatable across runs. Omitted, a random per-run key "
+        "is used and pseudonyms cannot be linked between runs. Treat the key "
+        "as a secret: anyone holding it can invert the tokens",
+    )
     p_run.add_argument("-o", "--out", default=None, help="output directory")
     p_run.add_argument("--lang", default="en", help="language code (default: en)")
     p_run.add_argument(
@@ -218,6 +225,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         language=args.lang,
         threshold=args.threshold,
         mask_char=args.mask_char,
+        hash_key=args.hash_key,
         docx_images=args.docx_images,
         eml_attachments=args.eml_attachments,
         extra=_yolo_extra(args),

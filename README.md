@@ -296,12 +296,42 @@ Drawing black rectangles over a PDF's text is not redaction — the characters
 stay in the content stream and any `pdftotext` recovers them. Rather than ship
 that, the suite reports honestly and points you at the backend that works.
 
+### Redaction modes
+
+| Mode | Output | What it guarantees |
+|---|---|---|
+| `replace` *(default)* | `<US_SSN>` | The value is gone. No linkage, no length, nothing recoverable. |
+| `redact` | *(removed)* | As above, without even the type label. |
+| `mask` | `********` | The value is gone. **Fixed width** — the mask never reveals how long the original was. |
+| `hash` | `<US_SSN:e9e7e9a44c8e>` | **Pseudonymisation, not anonymisation.** Equal values get equal tokens, so records stay correlatable. |
+| `blur` | *(pixels)* | Visual modes only (image/video). |
+
+**On `hash`.** The token is a keyed HMAC, not a bare digest. That distinction is
+the whole ballgame: PII comes from small spaces — an SSN is 10⁹ values, a phone
+~10¹⁰ — so an unkeyed `sha256(value)` is invertible by simply enumerating the
+space and comparing digests, in seconds, no matter how far the digest is
+truncated. A key makes the candidate set uncomputable.
+
+```bash
+redact run notes.txt -m hash                     # random per-run key: unlinkable between runs
+redact run ./inbox  -m hash --hash-key "$KEY"    # same key = same pseudonym, on purpose
+```
+
+Two limits worth stating plainly:
+
+- **The key is a credential.** Anyone holding it can run the enumeration above
+  and invert every token. Don't publish it alongside the output.
+- **Equality survives by design** — that is what a pseudonym is *for* — so token
+  frequency mirrors value frequency. If you don't need linkage, use `replace`
+  or `redact`, which leak neither.
+
 ### `run` options
 
 | Flag | Meaning |
 |---|---|
 | `-b, --backend` | backend name, or `auto` (default) to let the suite choose |
-| `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` |
+| `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` — see [Redaction modes](#redaction-modes) |
+| `--hash-key` | key for `-m hash`; same key = same pseudonym across runs (omit for a random per-run key) |
 | `-e, --entities` | restrict detection to these labels (comma-separated or repeated) |
 | `-o, --out` | output directory (default: alongside each source). The source tree is mirrored beneath it, so `inbox/a/x.txt` and `inbox/b/x.txt` never collide. |
 | `--threshold` | minimum confidence to act on a detection (default `0.35`) |

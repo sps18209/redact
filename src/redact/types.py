@@ -8,6 +8,7 @@ heavy tools happen to be installed.
 from __future__ import annotations
 
 import enum
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -38,9 +39,9 @@ class MediaType(str, enum.Enum):
 class RedactionMode(str, enum.Enum):
     """How a detected entity should be transformed."""
 
-    MASK = "mask"        # replace characters with a mask char (e.g. ****)
+    MASK = "mask"        # fixed-width run of mask characters (e.g. ********)
     REPLACE = "replace"  # replace with a typed placeholder (e.g. <EMAIL>)
-    HASH = "hash"        # replace with a stable hash of the value
+    HASH = "hash"        # keyed pseudonym: <TYPE:hmac>, equal inputs agree
     REDACT = "redact"    # remove entirely / black out
     BLUR = "blur"        # visual blur (images/video)
 
@@ -83,6 +84,21 @@ class RedactionOptions:
     language: str = "en"
     threshold: float = 0.35  # minimum confidence to act on a detection
     mask_char: str = "*"
+    #: Key for :attr:`RedactionMode.HASH`. When set, the same value yields the
+    #: same pseudonym in every run using this key, so records can be correlated
+    #: across documents on purpose. When ``None`` a random key is generated per
+    #: options object, making pseudonyms unlinkable between runs.
+    #:
+    #: The pseudonym is only as secret as this key: anyone holding it can
+    #: enumerate a low-entropy space (an SSN is 10^9 values) and invert every
+    #: token. Treat the key as a credential, not as a salt to publish.
+    hash_key: Optional[str] = None
+    #: Per-run key used when :attr:`hash_key` is None. Not a constructor
+    #: argument: it must not be pinned by accident, or runs become linkable.
+    _run_key: bytes = field(
+        default_factory=lambda: secrets.token_bytes(32),
+        init=False, repr=False, compare=False,
+    )
     output_dir: Optional[Path] = None  # where redacted artifacts are written
     dry_run: bool = False  # detect + report, but do not write redacted output
     #: What to do with images embedded in a .docx: keep | strip | blur.
@@ -90,6 +106,12 @@ class RedactionOptions:
     #: What to do with email attachments that cannot be redacted: keep | strip.
     eml_attachments: str = "keep"
     extra: dict = field(default_factory=dict)  # backend-specific escape hatch
+
+    def hash_material(self) -> bytes:
+        """The HMAC key for HASH mode: the explicit key, else this run's."""
+        if self.hash_key:
+            return self.hash_key.encode("utf-8")
+        return self._run_key
 
 
 @dataclass
