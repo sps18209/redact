@@ -266,3 +266,32 @@ def test_an_existing_local_file_is_used_as_is(tmp_path, monkeypatch):
     local.write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
     assert resolve_weights("plate.pt") == "plate.pt"
+
+
+# -- checkpoints must never land in the user's working directory --------------
+
+def test_redirect_clip_cache_never_raises(monkeypatch, tmp_path):
+    """Placement is a convenience; it must not be able to fail a redaction."""
+    from redact.backends import yolo
+
+    monkeypatch.setenv("REDACT_YOLO_WEIGHTS_DIR", str(tmp_path / "cache"))
+    yolo._redirect_clip_cache()  # ultralytics present or not, this must return
+
+
+def test_clip_text_encoder_is_redirected_out_of_the_cwd(monkeypatch, tmp_path):
+    """YOLO-World's set_classes embeds prompts with CLIP, which Ultralytics
+    fetches to WEIGHTS_DIR/clip. That setting defaults to the *relative* string
+    "weights", so a 338 MB encoder lands wherever `redact` was run — measured
+    here as ./weights/clip/ViT-B-32.pt inside the repo itself.
+    """
+    text_model = pytest.importorskip("ultralytics.nn.text_model")
+    from redact.backends import yolo
+
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("REDACT_YOLO_WEIGHTS_DIR", str(cache))
+    monkeypatch.setattr(text_model, "WEIGHTS_DIR", Path("weights"), raising=False)
+
+    yolo._redirect_clip_cache()
+
+    assert Path(text_model.WEIGHTS_DIR).is_absolute(), "a relative dir resolves against the CWD"
+    assert Path(text_model.WEIGHTS_DIR) == cache

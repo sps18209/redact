@@ -293,6 +293,31 @@ def resolve_weights(name: str) -> str:
     return str(cache / name)
 
 
+def _redirect_clip_cache() -> None:
+    """Keep YOLO-World's CLIP text encoder out of the user's CWD.
+
+    ``set_classes`` embeds the prompts with CLIP, which Ultralytics fetches to
+    ``WEIGHTS_DIR / "clip"``. ``WEIGHTS_DIR`` comes from its ``weights_dir``
+    setting, whose default is the *relative* string ``"weights"`` — so a 338 MB
+    encoder lands in whatever directory ``redact`` was run from. That is the
+    same defect ``resolve_weights`` fixes for the checkpoint, one layer down:
+    measured here, a run left ``./weights/clip/ViT-B-32.pt`` in the repo.
+
+    The module constant is rebound rather than ``SETTINGS.update``, which would
+    persist the change to the user's global Ultralytics config and affect their
+    other projects. Best-effort: if Ultralytics moves the constant, the download
+    is merely misplaced again, never broken, so this must not raise.
+    """
+    cache = weights_dir()
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        from ultralytics.nn import text_model
+
+        text_model.WEIGHTS_DIR = cache
+    except Exception:  # noqa: BLE001 - placement is a convenience, never a failure
+        pass
+
+
 def _load_model(name: str, wanted: Sequence[str]):
     """Return ``(model, {class_index: entity_label})`` for the requested classes."""
     key = (name, tuple(wanted))
@@ -305,6 +330,7 @@ def _load_model(name: str, wanted: Sequence[str]):
         from ultralytics import YOLOWorld
 
         model = YOLOWorld(checkpoint)
+        _redirect_clip_cache()
         model.set_classes(list(wanted))  # the prompts become the class list
         labels = {i: entity_label(c) for i, c in enumerate(wanted)}
     else:
