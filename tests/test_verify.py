@@ -176,20 +176,34 @@ def test_a_bad_original_directory_is_a_usage_error(tmp_path, capsys):
 
 # -- PDF structure must not read as PII ---------------------------------------
 
-def test_pdf_xref_offsets_are_not_reported_as_phone_numbers(tmp_path):
-    """Every PDF ends with a cross-reference table of ten-digit zero-padded
-    offsets, which look exactly like phone numbers (and two adjacent ones like a
-    card). Left unfiltered this flags every PDF ever produced."""
-    pymupdf = pytest.importorskip("pymupdf")
-    doc = pymupdf.open()
-    doc.new_page().insert_text((72, 100), "nothing sensitive here", fontsize=11)
-    path = tmp_path / "plain.pdf"
-    doc.save(str(path))
-    doc.close()
+def test_pdf_structure_is_not_reported_as_pii(tmp_path):
+    """Two shapes in every PDF match PII patterns:
 
-    assert b"00000 n" in path.read_bytes(), "precondition: the xref table is present"
-    report = verify_path(path)
-    assert report.clean, f"structural noise reported as PII: {[str(f) for f in report.findings]}"
+    * the cross-reference table — ten-digit zero-padded offsets, which look
+      exactly like phone numbers (two adjacent ones like a card);
+    * the trailer's document ID — two random hex strings, and a 32-char random
+      hex run matches the IBAN shape roughly a fifth of the time.
+
+    The ID is *random*, so a single save catches it only sometimes; this
+    asserted clean on one PDF and failed about 20% of runs, which read as a
+    flaky test when the flaky thing was the input. Saving many makes it
+    deterministic: at n=25 the odds of missing a 20% effect are ~0.4%.
+    """
+    pymupdf = pytest.importorskip("pymupdf")
+    offenders = []
+    for i in range(25):
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 100), "nothing sensitive here", fontsize=11)
+        path = tmp_path / f"plain{i}.pdf"
+        doc.save(str(path))
+        doc.close()
+        if i == 0:
+            assert b"00000 n" in path.read_bytes(), "precondition: xref table present"
+            assert b"/ID" in path.read_bytes(), "precondition: document ID present"
+        report = verify_path(path)
+        if not report.clean:
+            offenders.append([str(f) for f in report.findings])
+    assert not offenders, f"structural noise reported as PII: {offenders[:3]}"
 
 
 def test_a_real_number_in_pdf_content_is_still_reported(tmp_path):

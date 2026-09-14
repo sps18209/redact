@@ -317,7 +317,14 @@ python -m redact list                 # module entry point equivalent
   card), flagging every PDF. `_PDF_XREF` strips exactly that shape from the raw
   layer — never page content. Expect more of these: structural noise that looks
   like PII is the main cost of scanning every layer, and the fix is always a
-  narrow structural filter, never loosening detection.
+  narrow structural filter, never loosening detection. Two shapes are stripped
+  so far (`_PDF_XREF`, `_PDF_ID`).
+- **A "flaky" test here meant a random *input*, not a random test.** The PDF
+  trailer's `/ID` is two random hex strings, and a 32-char hex run matches the
+  IBAN shape about a fifth of the time — so a one-PDF assertion failed ~20% of
+  runs. Never write it off as infra: generate enough samples to make the
+  behaviour deterministic (that test now saves 25 PDFs) and find what is
+  actually varying.
 - **Layer order in `extract_layers` is load-bearing.** Specific layers are
   collected first and `raw` last, because a finding is attributed to the first
   layer it appears in; an uncompressed zip entry also appears in the raw bytes,

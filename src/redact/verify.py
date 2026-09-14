@@ -65,10 +65,21 @@ _HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/:?#]+)", re.I)
 #: sitting in the page content is untouched.
 _PDF_XREF = re.compile(r"^\d{10} \d{5} [nf]\s*$", re.M)
 
+#: The trailer's document ID: two random hex strings. A 32-char random hex run
+#: matches the IBAN shape (two letters, two digits, then alphanumerics) about a
+#: fifth of the time, which presented as a ~20% "flaky test" until the input,
+#: not the test, turned out to be the random thing. It identifies the file, not
+#: a person.
+_PDF_ID = re.compile(r"/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]")
+
 
 def _strip_pdf_structure(text: str) -> str:
-    """Drop cross-reference tables from a PDF's raw bytes before scanning."""
-    return _PDF_XREF.sub("", text)
+    """Drop cross-reference tables and the document ID before scanning.
+
+    Both are file plumbing that happens to match PII patterns. Only these exact
+    shapes go; page content is never touched.
+    """
+    return _PDF_ID.sub("", _PDF_XREF.sub("", text))
 
 
 def _is_structural(entity: Entity) -> bool:
