@@ -312,6 +312,12 @@ python -m redact list                 # module entry point equivalent
   namespace URLs are filtered (`_SCHEMA_HOSTS`), because flagging every Office
   document teaches users to ignore the tool, and an ignored verifier is worse
   than none. The filter matches *hosts*, so a real URL leak is still reported.
+  The same class bit twice: a PDF's cross-reference table is rows of ten-digit
+  zero-padded offsets, which read as phone numbers (two adjacent ones as a
+  card), flagging every PDF. `_PDF_XREF` strips exactly that shape from the raw
+  layer — never page content. Expect more of these: structural noise that looks
+  like PII is the main cost of scanning every layer, and the fix is always a
+  narrow structural filter, never loosening detection.
 - **Layer order in `extract_layers` is load-bearing.** Specific layers are
   collected first and `raw` last, because a finding is attributed to the first
   layer it appears in; an uncompressed zip entry also appears in the raw bytes,

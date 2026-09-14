@@ -390,6 +390,11 @@ edits — a leak in `customXml/` counts), every base64 payload, PDF text layers,
 then the raw bytes as a catch-all. Findings name the layer, so you know where to
 fix.
 
+Structural noise is filtered so the verb stays worth reading: XML namespace
+URLs and PDF cross-reference offsets look like PII to a pattern engine, and a
+tool that flags every Office file and every PDF is a tool you learn to ignore.
+The filters match those exact shapes only.
+
 **`--original` enables the positive control.** A scan that can't find PII in the
 *source* proves nothing about the redacted copy, so that case is reported
 `INCONCLUSIVE` rather than `clean`:

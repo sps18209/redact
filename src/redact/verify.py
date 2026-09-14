@@ -57,6 +57,19 @@ _SCHEMA_HOSTS = frozenset({
 
 _HOST = re.compile(r"^[a-z][a-z0-9+.-]*://([^/:?#]+)", re.I)
 
+#: A PDF cross-reference entry: ten-digit offset, five-digit generation, n|f.
+#: Every PDF ends with a table of these, and ten zero-padded digits look exactly
+#: like a phone number to the engine (two adjacent ones look like a card). Left
+#: in, this flags every PDF ever produced — the same cry-wolf failure as the
+#: namespace URLs. Only this exact structural shape is removed; a real number
+#: sitting in the page content is untouched.
+_PDF_XREF = re.compile(r"^\d{10} \d{5} [nf]\s*$", re.M)
+
+
+def _strip_pdf_structure(text: str) -> str:
+    """Drop cross-reference tables from a PDF's raw bytes before scanning."""
+    return _PDF_XREF.sub("", text)
+
 
 def _is_structural(entity: Entity) -> bool:
     """True for a namespace/schema URL — file plumbing, never user data."""
@@ -164,7 +177,10 @@ def extract_layers(path: Path, media_type: MediaType) -> Dict[str, str]:
 
     # 4. Last: the bytes as they sit on disk, as the catch-all for anything the
     # layers above could not reach.
-    layers["raw"] = raw.decode("utf-8", "replace")
+    text = raw.decode("utf-8", "replace")
+    if media_type is MediaType.PDF:
+        text = _strip_pdf_structure(text)
+    layers["raw"] = text
     return layers
 
 

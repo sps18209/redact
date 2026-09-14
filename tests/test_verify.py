@@ -13,6 +13,8 @@ never capable of finding it, so a clean result meant nothing.
 
 import base64
 
+import pytest
+
 from redact.cli import main
 from redact.types import MediaType
 from redact.verify import extract_layers, verify_path
@@ -170,3 +172,34 @@ def test_a_bad_original_directory_is_a_usage_error(tmp_path, capsys):
     rc = main(["verify", str(tmp_path / "a.txt"), "--original", str(tmp_path / "nope")])
     assert rc == 2
     assert "not a directory" in capsys.readouterr().err
+
+
+# -- PDF structure must not read as PII ---------------------------------------
+
+def test_pdf_xref_offsets_are_not_reported_as_phone_numbers(tmp_path):
+    """Every PDF ends with a cross-reference table of ten-digit zero-padded
+    offsets, which look exactly like phone numbers (and two adjacent ones like a
+    card). Left unfiltered this flags every PDF ever produced."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 100), "nothing sensitive here", fontsize=11)
+    path = tmp_path / "plain.pdf"
+    doc.save(str(path))
+    doc.close()
+
+    assert b"00000 n" in path.read_bytes(), "precondition: the xref table is present"
+    report = verify_path(path)
+    assert report.clean, f"structural noise reported as PII: {[str(f) for f in report.findings]}"
+
+
+def test_a_real_number_in_pdf_content_is_still_reported(tmp_path):
+    """The filter matches only the xref shape, so page content is untouched."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 100), f"patient ssn {SSN}", fontsize=11)
+    path = tmp_path / "leak.pdf"
+    doc.save(str(path))
+    doc.close()
+
+    report = verify_path(path)
+    assert any(f.entity.entity_type == "US_SSN" for f in report.findings)
