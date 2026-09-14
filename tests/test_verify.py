@@ -217,3 +217,49 @@ def test_a_real_number_in_pdf_content_is_still_reported(tmp_path):
 
     report = verify_path(path)
     assert any(f.entity.entity_type == "US_SSN" for f in report.findings)
+
+
+# -- MIME wraps base64 at 76 characters ---------------------------------------
+
+def test_a_value_straddling_a_base64_line_break_is_found(tmp_path):
+    """Matching single lines (^...$) decoded each 76-char line into disjoint
+    57-byte chunks, so a value spanning the boundary was split in half and never
+    found — roughly one in five, in this verb's headline feature."""
+    hits = []
+    for pad in (48, 52, 56, 60):
+        plain = ("word " * 40)[:pad] + f" ssn {SSN} tail"
+        payload = base64.b64encode(plain.encode()).decode()
+        wrapped = "\n".join(payload[i:i + 76] for i in range(0, len(payload), 76))
+        path = tmp_path / f"b{pad}.eml"
+        path.write_text(
+            "From: a@b.com\nSubject: x\nMIME-Version: 1.0\n"
+            'Content-Type: application/pdf; name="x.pdf"\n'
+            "Content-Transfer-Encoding: base64\n\n" + wrapped + "\n"
+        )
+        assert len(wrapped.splitlines()) > 1, "precondition: the payload wraps"
+        hits.append(any(f.entity.entity_type == "US_SSN" for f in verify_path(path).findings))
+    assert all(hits), f"missed at offsets {[p for p, h in zip((48,52,56,60), hits) if not h]}"
+
+
+def test_a_host_is_matched_as_a_prefix_not_a_character_set(tmp_path):
+    """`lstrip("www.")` strips a character *set*: "www.w3.org" became "3.org",
+    and a real host like "w.sun.com" was suppressed as namespace noise."""
+    from redact.types import Entity
+    from redact.verify import _is_structural
+
+    assert _is_structural(Entity("URL", 1.0, None, None, "http://www.w3.org/x"))
+    assert not _is_structural(Entity("URL", 1.0, None, None, "https://w.sun.com/x"))
+
+
+def test_an_unreadable_pdf_is_inconclusive_not_clean(tmp_path, monkeypatch):
+    """Format extraction swallowed every exception, leaving no layer AND no
+    marker, so verify printed [clean] having searched only compressed bytes."""
+    import redact.verify as mod
+
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.4\nnot really a pdf\n")
+    monkeypatch.setattr(mod, "_pdf_text", lambda p: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    report = verify_path(path)
+    assert report.inconclusive, "an unscannable file must not be reported clean"
+    assert report.status == "INCONCLUSIVE"

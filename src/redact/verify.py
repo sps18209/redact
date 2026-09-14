@@ -40,8 +40,15 @@ from .types import Entity, MediaType
 
 __all__ = ["Finding", "VerificationReport", "extract_layers", "verify_path"]
 
-#: A run of base64 long enough to be a payload rather than an id.
-_B64 = re.compile(rb"^[A-Za-z0-9+/=]{24,}$", re.M)
+#: A base64 payload, which MIME wraps at 76 characters. Matching single lines
+#: (``^...$``) decoded each 76-char line separately into disjoint 57-byte
+#: chunks, so any value straddling a line boundary was split in half and never
+#: found — roughly a one-in-five miss, in the verb's headline feature. Match the
+#: whole run of consecutive base64 lines and join before decoding.
+_B64 = re.compile(rb"(?:^[A-Za-z0-9+/=]{4,}[ \t]*\r?\n?)+", re.M)
+
+#: Below this a "run" is an identifier or a hash, not a payload worth decoding.
+_B64_MIN = 24
 
 #: Hosts that appear in XML namespace declarations, not in user content. Every
 #: OOXML package carries a dozen of them, so reporting them as findings would
@@ -89,8 +96,11 @@ def _is_structural(entity: Entity) -> bool:
     match = _HOST.match(entity.text.strip())
     if not match:
         return False
-    return match.group(1).lower().lstrip("www.") in _SCHEMA_HOSTS or \
-        match.group(1).lower() in _SCHEMA_HOSTS
+    host = match.group(1).lower()
+    # NOT lstrip("www."): that strips a character *set*, so "www.w3.org" became
+    # "3.org" and a real host like "w.sun.com" was wrongly suppressed as noise.
+    bare = host[4:] if host.startswith("www.") else host
+    return host in _SCHEMA_HOSTS or bare in _SCHEMA_HOSTS
 
 
 @dataclass
@@ -176,8 +186,11 @@ def extract_layers(path: Path, media_type: MediaType) -> Dict[str, str]:
 
     # 2. Base64 payloads — the encoding that defeats a naive grep.
     for index, blob in enumerate(_B64.findall(raw)):
+        joined = b"".join(blob.split())  # unwrap the 76-char MIME lines
+        if len(joined) < _B64_MIN:
+            continue
         try:
-            decoded = base64.b64decode(blob, validate=True)
+            decoded = base64.b64decode(joined, validate=True)
         except Exception:
             continue
         if decoded:
@@ -219,8 +232,15 @@ def _structured_text(path: Path, media_type: MediaType) -> Dict[str, str]:
             out.update(_pdf_text(path))
         elif media_type is MediaType.IMAGE:
             out.update(_image_text(path))
-    except Exception:  # a malformed file must not abort verification
-        pass
+    except Exception:
+        # A malformed file must not abort verification — but silence here used
+        # to mean no layer AND no marker, so verify printed [clean] having
+        # searched only compressed raw bytes. Leave a marker so the caller
+        # reports INCONCLUSIVE instead of a reassurance it cannot support.
+        if media_type is MediaType.PDF:
+            out.setdefault("pdf:<no engine>", "")
+        elif media_type is MediaType.IMAGE:
+            out.setdefault("image:<no ocr>", "")
     return out
 
 
@@ -298,8 +318,13 @@ def verify_path(
     layers = extract_layers(path, media_type)
     report.layers_scanned = len(layers)
     if any(k.startswith("pdf:<no engine>") for k in layers):
+        # Same reasoning as the image case below: a PDF's text lives in
+        # compressed streams, so searching raw bytes finds nothing whether or
+        # not the file is clean. Reporting "clean" from that is the base64
+        # failure again, so force INCONCLUSIVE rather than merely noting it.
+        report.control_entities = 0
         report.note = (
-            'no PDF engine installed — only raw bytes were searched, which a '
+            "no usable PDF engine — only raw bytes were searched, which a "
             'compressed stream hides. pip install "redact-suite[pymupdf]"'
         )
     if any(k.startswith("image:<no ocr>") for k in layers):

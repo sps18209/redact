@@ -258,3 +258,80 @@ def test_a_plain_eml_is_unaffected_by_the_mbox_path(eml, tmp_path):
         res.output_path.read_text(), policy=email.policy.compat32
     )
     assert msg["Subject"] is not None
+
+
+# -- repeated headers: Received appears once per relay hop --------------------
+
+def _redact_raw(path, tmp_path, **kw):
+    from redact.backends.builtin import detect_entities, replacement_for
+    from redact.eml import redact_eml
+    from redact.types import RedactionOptions
+
+    opts = RedactionOptions(**kw)
+    out = tmp_path / "out.eml"
+    redact_eml(path, out, lambda t: detect_entities(t, None, 0.35),
+               lambda e: replacement_for(e, opts))
+    return out.read_text()
+
+
+def test_pii_in_a_later_repeated_header_is_redacted(tmp_path):
+    """msg.get() returns only the FIRST occurrence. With a clean first hop, the
+    address in the second survived into the output with a success report."""
+    src = tmp_path / "m.eml"
+    src.write_text(
+        "Received: from mail.internal by relay\n"
+        "Received: from b.example.com (198.51.100.77)\n"
+        "From: x@example.com\nSubject: hi\n\nbody\n"
+    )
+    out = _redact_raw(src, tmp_path)
+    assert "198.51.100.77" not in out
+
+
+def test_repeated_headers_are_not_deleted_wholesale(tmp_path):
+    """`del msg[name]` removes every occurrence, so redacting the first hop
+    silently dropped the rest of the routing chain."""
+    import re
+
+    src = tmp_path / "m.eml"
+    src.write_text(
+        "Received: from a.example.com (1.2.3.4)\n"
+        "Received: from b.example.com (198.51.100.77)\n"
+        "From: x@example.com\nSubject: hi\n\nbody\n"
+    )
+    out = _redact_raw(src, tmp_path)
+    assert len(re.findall(r"(?im)^received:", out)) == 2, "a relay hop was lost"
+    assert "1.2.3.4" not in out and "198.51.100.77" not in out
+
+
+# -- a redacted message must stay greppable -----------------------------------
+
+def test_a_plain_ascii_body_is_not_re_encoded_to_base64(tmp_path):
+    """set_payload(charset=...) makes the email package choose base64, so a
+    readable message came out of redaction encoded — the exact condition that
+    makes a user's own grep meaningless, created by the module that exists to
+    prevent it."""
+    src = tmp_path / "p.eml"
+    src.write_text("From: a@b.com\nSubject: hi\nContent-Type: text/plain\n\nssn 078-05-1120 ok\n")
+    out = _redact_raw(src, tmp_path)
+    assert "<US_SSN>" in out, "the placeholder must be visible to a plain search"
+    assert "base64" not in out.lower()
+    assert "078-05-1120" not in out
+
+
+def test_a_non_ascii_body_is_still_redacted_and_decodes(tmp_path):
+    import email
+    import email.policy
+
+    src = tmp_path / "u.eml"
+    src.write_text(
+        "From: a@b.com\nSubject: hi\nMIME-Version: 1.0\n"
+        'Content-Type: text/plain; charset="utf-8"\n\nnaïve café ssn 078-05-1120\n',
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "out.eml"
+    _redact_raw(src, tmp_path)
+    body = email.message_from_bytes(
+        out_path.read_bytes(), policy=email.policy.compat32
+    ).get_payload(decode=True).decode("utf-8", "replace")
+    assert "078-05-1120" not in body
+    assert "café" in body, "the accents must survive the round trip"

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import List, Sequence
 
 from ..continuity import TemporalMaskTracker
+from .. import ocr
 from ..document import Document, output_path
 from ..media import mux_audio, video_fps
 from ..types import (
@@ -244,6 +245,17 @@ class YoloBackend(Backend):
                     f"{counts} masked ({strategy})" if counts
                     else f"nothing detected for: {', '.join(wanted)}"
                 )
+                # This backend finds objects it was prompted for. An image can
+                # also carry PII as *pixels of text* — a screenshot of a record
+                # — which it neither sees nor touches. deface already declares
+                # this; yolo did not, so `-b yolo screenshot.png` reported
+                # "nothing detected", exit 0, over a legible SSN.
+                note = ocr.unexamined_note(
+                    document.path, options.entities, options.threshold
+                )
+                if note:
+                    result.unredacted.append(note)
+                    result.message += f" | WARNING: {note}"
         except Exception as exc:
             result.success = False
             result.message = f"yolo failed: {exc}"

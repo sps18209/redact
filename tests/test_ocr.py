@@ -165,3 +165,35 @@ def test_verify_without_an_engine_is_inconclusive_not_clean(screenshot, monkeypa
     assert report.inconclusive
     assert report.status == "INCONCLUSIVE"
     assert "NOT examined" in report.note
+
+
+@needs_ocr
+def test_the_yolo_backend_also_declares_unexamined_text(screenshot, tmp_path):
+    """The honesty check was wired into deface only, so
+    `redact run screenshot.png -b yolo` reported "nothing detected", empty
+    unredacted, exit 0 — over a legible SSN. Every image backend owes the same
+    declaration, not just the first one that got it."""
+    from redact.backends.yolo import YoloBackend
+
+    backend = YoloBackend()
+    if backend.missing_dependencies():
+        pytest.skip("yolo extra not installed")
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        # Stub detection: this test is about the declaration, not the model.
+        monkey.setattr(backend, "_load_model", lambda *a, **k: (object(), {}), raising=False)
+        import redact.backends.yolo as mod
+
+        monkey.setattr(mod, "_load_model", lambda *a, **k: (object(), {}))
+        monkey.setattr(mod, "_redact_image", lambda *a, **k: [])
+        res = backend.redact(
+            Document(path=screenshot, media_type=MediaType.IMAGE),
+            RedactionOptions(output_dir=tmp_path / "out"),
+        )
+    finally:
+        monkey.undo()
+
+    assert res.success, res.message
+    assert res.unredacted, "yolo must declare legible text it did not redact"
+    assert not res.fully_redacted

@@ -386,6 +386,42 @@ python -m redact list                 # module entry point equivalent
   and `redactai`'s message both pointed users at `pdf-redact-tools` as the fix;
   following that advice lands on a SyntaxError. The messages now say what it
   costs, and `redactai` points at `pymupdf` instead.
+- **A repeated header must be walked, not sampled.** `Received` appears once
+  per relay hop. `msg.get()` returns only the first, and `del msg[name]` removes
+  them all — wrong in opposite directions: a clean first hop left PII in the
+  second untouched in the output, and a dirty first hop silently deleted the
+  rest of the routing chain. Use `get_all`, rewrite every occurrence, re-add
+  under the message's own spelling of the name.
+- **`_set_part_text` must keep plain text plain.** `set_payload(charset=...)`
+  makes the email package choose base64, so redacting a readable 7bit message
+  produced a base64 body — manufacturing the exact condition this module exists
+  to prevent, where a user's `grep` over the output means nothing. ASCII stays
+  7bit; only text that needs an encoding gets one, and quoted-printable before
+  base64.
+- **MIME wraps base64 at 76 characters.** `verify`'s `_B64` matched single lines
+  (`^...$`), decoding each into disjoint 57-byte chunks, so a value straddling a
+  line boundary was split and never found — about one in five, in the verb's
+  headline feature. Match the whole run of consecutive base64 lines and join
+  before decoding.
+- **An unscannable file is INCONCLUSIVE, never clean.** `_structured_text`
+  swallowed every exception, leaving no layer *and* no marker, so `verify`
+  printed `[clean]` having searched only compressed bytes. Both the PDF and
+  image branches now force `control_entities = 0`. Any new format branch must
+  leave a marker on failure.
+- **`lstrip("www.")` strips a character set, not a prefix** — `www.w3.org`
+  became `3.org`, and a real host like `w.sun.com` was suppressed as namespace
+  noise. Slice the prefix explicitly.
+- **PowerPoint's modern comments are `modernComment_1_2F9CA1.xml`** — underscores
+  and hex, which `(modern)?[Cc]omment\d*` cannot match, so the entire modern
+  comment system passed through unredacted; `ppt/authors.xml` (every commenter's
+  name) was never scanned either. A chart also keeps its **whole source
+  workbook** under `ppt/embeddings/`, and only the `c:v` display cache is
+  rewritten — "Edit Data" reopens the original table. That is declared in
+  `unredacted` rather than silently copied; redacting it properly is still open.
+- **`builtin.redact_office_document` must forward every "left behind" field.**
+  `eml` reports `unredacted_attachments`, `pptx` reports `unredacted`; carrying
+  only the first meant a declared gap never reached the CLI and the run exited
+  0 over content the module had said it left alone.
 - Person-name / free-text NER is **Presidio's** job, not the builtin engine —
   the builtin engine only catches pattern-based PII (email, phone, SSN, card w/
   Luhn, IBAN, IP, URL). Don't "fix" the builtin engine to chase names; install

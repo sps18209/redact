@@ -235,3 +235,45 @@ def test_corrupt_pptx_is_a_failed_result(tmp_path):
 def test_suite_routes_pptx(tmp_path, pptx, builtin_only_suite):
     res = builtin_only_suite.redact_path(pptx, RedactionOptions(output_dir=tmp_path / "o"))
     assert res.success and res.media_type is MediaType.PPTX
+
+
+# -- parts that were never scanned --------------------------------------------
+
+def test_modern_comments_and_authors_are_scanned():
+    """Modern PowerPoint comments are ppt/comments/modernComment_1_2F9CA1.xml —
+    underscores and hex, which the old pattern could not match, so the whole
+    modern comment system passed through. authors.xml holds every commenter's
+    display name and was never looked at."""
+    from redact.pptx import _TEXT_PARTS
+
+    for name in (
+        "ppt/comments/comment1.xml",
+        "ppt/comments/modernComment_1_2F9CA1.xml",
+        "ppt/authors.xml",
+    ):
+        assert _TEXT_PARTS.match(name), f"{name} is not scanned"
+
+
+def test_an_embedded_workbook_is_declared_not_silently_copied(tmp_path):
+    """A chart keeps its entire source workbook under ppt/embeddings/ and only
+    the c:v display cache is rewritten, so 'Edit Data' on the redacted deck
+    reopens the original table."""
+    import zipfile
+
+    from redact.backends.builtin import detect_entities, replacement_for
+    from redact.pptx import redact_pptx
+    from redact.types import RedactionOptions
+
+    src = tmp_path / "deck.pptx"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr("[Content_Types].xml", CONTENT_TYPES)
+        z.writestr("_rels/.rels", ROOT_RELS)
+        z.writestr("ppt/presentation.xml", PRESENTATION)
+        z.writestr("ppt/embeddings/Microsoft_Excel_Sheet1.xlsx", b"PK\x03\x04 source data")
+
+    opts = RedactionOptions()
+    res = redact_pptx(src, tmp_path / "o.pptx",
+                      lambda t: detect_entities(t, None, 0.35),
+                      lambda e: replacement_for(e, opts))
+    assert res.unredacted, "an unredacted embedded workbook must be declared"
+    assert "Edit Data" in res.unredacted[0]

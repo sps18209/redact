@@ -24,12 +24,25 @@ from .base import Backend
 _BINARY = "pdf-redact-tools"
 
 
+#: Memoised probe result, keyed by path. `missing_dependencies()` must stay
+#: cheap — it runs during discovery and once per document in a batch — and
+#: forking a subprocess each time would make a 200-PDF run pay it 200 times.
+_PROBED = {}
+
+
 def _runs(candidate: str) -> bool:
     """True only if the binary actually executes.
 
     Upstream stopped at Python 2, so what is on PATH is usually a script that
     raises SyntaxError the moment an interpreter reads it.
     """
+    if candidate in _PROBED:
+        return _PROBED[candidate]
+    _PROBED[candidate] = _probe(candidate)
+    return _PROBED[candidate]
+
+
+def _probe(candidate: str) -> bool:
     try:
         completed = subprocess.run(
             [candidate, "--help"],

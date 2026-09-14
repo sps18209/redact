@@ -62,7 +62,12 @@ _TEXT_PARTS = re.compile(
     r"slideLayouts/slideLayout\d+|"
     r"slideMasters/slideMaster\d+|"
     r"notesMasters/notesMaster\d+|"
-    r"comments/(modern)?[Cc]omment\d*|"
+    # Modern PowerPoint comments are ppt/comments/modernComment_1_2F9CA1.xml —
+    # underscores and hex, which "(modern)?[Cc]omment\d*" cannot match, so the
+    # whole modern comment system passed through unredacted. authors.xml holds
+    # every commenter's display name and was never scanned at all.
+    r"comments/[A-Za-z]*[Cc]omment[A-Za-z0-9_]*|"
+    r"authors|"
     r"charts/chart\d+"
     r")\.xml$"
 )
@@ -79,6 +84,12 @@ class PptxRedaction:
     entities: List[Entity] = field(default_factory=list)
     redacted_text: str = ""
     notes: List[str] = field(default_factory=list)
+    #: Parts this module knowingly did not redact. A chart keeps its *entire*
+    #: source workbook under ppt/embeddings/ and only its `c:v` display cache is
+    #: rewritten, so "Edit Data" on the redacted deck reopens the original
+    #: table. Declared rather than silently copied, per the suite's rule that a
+    #: clean report must not outrun what was actually done.
+    unredacted: List[str] = field(default_factory=list)
 
 
 def extract_text(path) -> str:
@@ -134,6 +145,15 @@ def redact_pptx(
             if new is not None:
                 replacements[name] = new
         result.redacted_text = "\n".join(chunks)
+
+        embedded = [n for n in names if n.startswith("ppt/embeddings/")]
+        if embedded:
+            shown = ", ".join(sorted(n.rsplit("/", 1)[-1] for n in embedded)[:3])
+            result.unredacted.append(
+                f"{len(embedded)} embedded workbook(s) copied unchanged ({shown}) "
+                "— a chart's source data survives 'Edit Data' even though its "
+                "displayed values were redacted"
+            )
 
         if scrub_authors:
             for part, tags in METADATA_TAGS.items():

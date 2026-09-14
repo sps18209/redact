@@ -171,18 +171,40 @@ def _redact_message(
     unredacted: List[str] = []
     stripped = 0
 
-    # 1. Headers.
-    for name in list(msg.keys()):
-        if name.lower() not in REDACTED_HEADERS:
-            continue
-        value = msg.get(name)
-        if not value:
-            continue
-        new, ents = apply_text(str(value), detect, replace)
-        if ents:
-            _replace_header(msg, name, new)
-            entities.extend(unpositioned(ents))
-            chunks.append(new)
+    # 1. Headers. A header name may legitimately repeat — `Received` appears
+    # once per relay hop, and each hop carries a host and an address. Reading
+    # with msg.get() returns only the *first*, so every later occurrence went
+    # unscanned; and _replace_header's `del msg[name]` removes them all. Both
+    # halves are wrong in opposite directions: a clean first hop left PII in the
+    # second untouched in the output, and a dirty first hop silently deleted the
+    # rest of the routing chain. Walk every occurrence and rewrite them in place.
+    # Keep the name as the message spells it: re-adding under a lowercased key
+    # rewrites every header in the output, which is valid but gratuitous churn.
+    seen_names = []
+    for name in msg.keys():
+        if name.lower() in REDACTED_HEADERS and not any(
+            n.lower() == name.lower() for n in seen_names
+        ):
+            seen_names.append(name)
+
+    for name in seen_names:
+        values = msg.get_all(name) or []
+        rewritten = []
+        changed = False
+        for value in values:
+            if not value:
+                rewritten.append(value)
+                continue
+            new, ents = apply_text(str(value), detect, replace)
+            rewritten.append(new)
+            if ents:
+                changed = True
+                entities.extend(unpositioned(ents))
+                chunks.append(new)
+        if changed:
+            del msg[name]  # removes every occurrence
+            for value in rewritten:
+                msg[name] = value  # re-add all of them, in order
 
     # 2. Body parts and attachments.
     for part in _walk(msg):
@@ -285,14 +307,35 @@ def _part_text(part: Message) -> str:
 
 
 def _set_part_text(part: Message, text: str) -> None:
-    """Write text back, re-encoding so the stored bytes really change."""
-    charset = part.get_content_charset() or "utf-8"
-    try:
-        encoded = text.encode(charset)
-    except (LookupError, UnicodeEncodeError):
-        charset, encoded = "utf-8", text.encode("utf-8")
+    """Write text back so the stored bytes really change.
+
+    Plain text stays plain. ``set_payload(..., charset="utf-8")`` makes the
+    email package pick base64 for the body, so a readable 7bit message came out
+    of redaction base64-encoded — which is the exact condition this module's
+    docstring says makes a user's own `grep` meaningless. Only text that will
+    not survive as ASCII gets an encoding, and then the smallest one that works.
+    """
     del part["Content-Transfer-Encoding"]
-    part.set_payload(encoded.decode(charset), charset=charset)
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError:
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            text.encode(charset)
+        except (LookupError, UnicodeEncodeError):
+            charset = "utf-8"
+        # Quoted-printable keeps most of the body legible; base64 would not.
+        part.set_payload(text, charset=charset)
+        if (part.get("Content-Transfer-Encoding") or "").lower() == "base64":
+            del part["Content-Transfer-Encoding"]
+            from email import encoders
+
+            part.set_payload(text.encode(charset))
+            encoders.encode_quopri(part)
+            part.set_param("charset", charset, header="Content-Type")
+        return
+    part.set_payload(text)
+    part["Content-Transfer-Encoding"] = "7bit"
 
 
 def _replace_header(msg: Message, name: str, value: str) -> None:

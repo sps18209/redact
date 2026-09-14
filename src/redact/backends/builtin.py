@@ -304,7 +304,11 @@ def redact_office_document(
 
     result.entities = office.entities
     result.redacted_text = office.redacted_text
+    # Office formats report differently: eml uses `unredacted_attachments`,
+    # pptx uses `unredacted`. Carry both or a declared gap never reaches the
+    # CLI, and the run exits 0 over content the module said it left alone.
     result.unredacted = list(getattr(office, "unredacted_attachments", []))
+    result.unredacted.extend(getattr(office, "unredacted", []))
     notes = list(office.notes)
     if options.dry_run:
         notes.insert(0, "dry-run: detected only, nothing written")
