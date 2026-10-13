@@ -144,8 +144,32 @@ def _dedupe_overlaps(entities: List[Entity]) -> List[Entity]:
 MASK_WIDTH = 8
 
 
+def initials_of(name: str) -> str:
+    """"Alex Villalobos, JD" -> "A. V." — one initial per capitalised word.
+
+    Credentials after a comma ("JD", "LLM") and lower-case particles are not
+    part of the name, so they neither yield an initial nor survive.
+    """
+    head = name.split(",")[0]
+    words = [w for w in head.split() if w[:1].isalpha() and w[0].isupper()]
+    # A lone all-caps token ("JD", "LLM") is a credential the detector mislabelled
+    # as a person, not a name.
+    if len(words) == 1 and len(words[0]) > 1 and words[0].isupper():
+        return ""
+    letters = [w[0].upper() for w in words]
+    return " ".join(f"{c}." for c in letters)
+
+
 def replacement_for(entity: Entity, options: RedactionOptions) -> str:
     original = entity.text or ""
+    if (
+        options.keep_initials
+        and options.mode is RedactionMode.REPLACE
+        and entity.entity_type == "PERSON"
+    ):
+        initials = initials_of(original)
+        if initials:
+            return initials
     if options.mode is RedactionMode.MASK:
         return options.mask_char * MASK_WIDTH
     if options.mode is RedactionMode.HASH:
