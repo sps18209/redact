@@ -89,6 +89,23 @@ def _strip_pdf_structure(text: str) -> str:
     return _PDF_ID.sub("", _PDF_XREF.sub("", text))
 
 
+#: Office Open XML identifiers. A braced GUID ("{9C124767-2382-...}") carries a
+#: shape ID, and ``p14:creationId val="1805331330"`` is a random 32-bit slide
+#: stamp; ten digits read as a phone number and a GUID's digit runs read as one
+#: too, flagging every slide of every deck. Only these exact shapes are removed,
+#: and only from XML parts — text a person typed is never touched.
+_OOXML_GUID = re.compile(r"\{[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}\}")
+_OOXML_CREATION_ID = re.compile(r"(<\w+:creationId\b[^>]*?\bval=\")\d+(\")")
+#: ``<p:sldMasterId id="2147483758">`` / ``<p:sldLayoutId id="...">`` — ten-digit
+#: counters that index masters and layouts, never content.
+_OOXML_SLD_ID = re.compile(r"(<\w+:(?:sldMasterId|sldLayoutId|sldId|notesMasterId|handoutMasterId)\b[^>]*?\bid=\")\d+(\")")
+
+
+def _strip_ooxml_structure(text: str) -> str:
+    """Drop GUIDs and creationId stamps from OOXML markup before scanning."""
+    return _OOXML_SLD_ID.sub(r"\1\2", _OOXML_CREATION_ID.sub(r"\1\2", _OOXML_GUID.sub("", text)))
+
+
 def _is_structural(entity: Entity) -> bool:
     """True for a namespace/schema URL — file plumbing, never user data."""
     if entity.entity_type != "URL" or not entity.text:
@@ -178,7 +195,10 @@ def extract_layers(path: Path, media_type: MediaType) -> Dict[str, str]:
             with zipfile.ZipFile(path) as zf:
                 for name in zf.namelist():
                     try:
-                        layers[f"zip:{name}"] = zf.read(name).decode("utf-8", "replace")
+                        part = zf.read(name).decode("utf-8", "replace")
+                        if name.endswith((".xml", ".rels")):
+                            part = _strip_ooxml_structure(part)
+                        layers[f"zip:{name}"] = part
                     except (KeyError, OSError, zipfile.BadZipFile):
                         continue
         except zipfile.BadZipFile:
@@ -204,6 +224,8 @@ def extract_layers(path: Path, media_type: MediaType) -> Dict[str, str]:
     text = raw.decode("utf-8", "replace")
     if media_type is MediaType.PDF:
         text = _strip_pdf_structure(text)
+    elif zipfile.is_zipfile(path):
+        text = _strip_ooxml_structure(text)
     layers["raw"] = text
     return layers
 
