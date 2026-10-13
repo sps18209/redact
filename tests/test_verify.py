@@ -263,3 +263,19 @@ def test_an_unreadable_pdf_is_inconclusive_not_clean(tmp_path, monkeypatch):
     report = verify_path(path)
     assert report.inconclusive, "an unscannable file must not be reported clean"
     assert report.status == "INCONCLUSIVE"
+
+
+def test_ooxml_structural_ids_are_not_pii():
+    """GUIDs, creationId stamps and master/layout ids read as phone numbers."""
+    from redact.verify import _strip_ooxml_structure
+
+    xml = (
+        '<p:sldLayoutId id="2147483759" r:id="rId1"/>'
+        '<p14:creationId xmlns:p14="x" val="1805331330"/>'
+        '<a16:creationId xmlns:a16="x" id="{9C124767-2382-A4EB-223C-3DD512B7C000}"/>'
+        '<a:t>Call 555-867-5309</a:t>'
+    )
+    out = _strip_ooxml_structure(xml)
+    for noise in ("2147483759", "1805331330", "9C124767"):
+        assert noise not in out
+    assert "555-867-5309" in out  # typed text is never stripped
