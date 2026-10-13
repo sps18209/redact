@@ -84,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold", type=float, default=0.35,
         help="minimum confidence to act on a detection (default: 0.35)",
     )
+    p_run.add_argument("--keep-initials", action="store_true",
+                       help="replace each person's name with their initials (A. V.) instead of <PERSON>")
     p_run.add_argument("--mask-char", default="*", help="character used in mask mode")
     p_run.add_argument(
         "--yolo-model", default=None, metavar="CKPT",
@@ -295,6 +297,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         language=args.lang,
         threshold=args.threshold,
         mask_char=args.mask_char,
+        keep_initials=args.keep_initials,
         hash_key=args.hash_key,
         docx_images=args.docx_images,
         eml_attachments=args.eml_attachments,

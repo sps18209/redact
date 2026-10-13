@@ -87,3 +87,19 @@ def test_backend_dry_run_writes_nothing(tmp_path):
 
 def test_builtin_always_available():
     assert BuiltinBackend().is_available()
+
+
+def test_keep_initials_for_person_names():
+    from redact.backends.builtin import replacement_for
+    from redact.types import Entity, RedactionOptions
+
+    opts = RedactionOptions(keep_initials=True)
+    person = lambda t: Entity(entity_type="PERSON", text=t, start=0, end=len(t), score=1.0)
+    assert replacement_for(person("Alex Villalobos, JD, LLM"), opts) == "A. V."
+    assert replacement_for(person("Sage P. Smith"), opts) == "S. P. S."
+    assert replacement_for(person("Mark McInnis"), opts) == "M. M."
+    assert replacement_for(person("JD"), opts) == "<PERSON>"
+    # off by default, and other types are unaffected
+    assert replacement_for(person("Alex V"), RedactionOptions()) == "<PERSON>"
+    email = Entity(entity_type="EMAIL_ADDRESS", text="a@b.co", start=0, end=6, score=1.0)
+    assert replacement_for(email, opts) == "<EMAIL_ADDRESS>"

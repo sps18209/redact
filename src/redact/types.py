@@ -103,6 +103,11 @@ class RedactionOptions:
     dry_run: bool = False  # detect + report, but do not write redacted output
     #: What to do with images embedded in a .docx: keep | strip | blur.
     docx_images: str = "keep"
+    #: Leave a PERSON's first initials behind ("Alex Villalobos" -> "A. V.")
+    #: instead of a bare placeholder, for readers who need to tell speakers apart.
+    #: Only applies to REPLACE mode; initials narrow a name but do not anonymise
+    #: it, so this is off by default.
+    keep_initials: bool = False
     #: What to do with email attachments that cannot be redacted: keep | strip.
     eml_attachments: str = "keep"
     extra: dict = field(default_factory=dict)  # backend-specific escape hatch
