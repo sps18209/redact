@@ -59,6 +59,7 @@ class RedactAIBackend(Backend):
     supported_media_types = (MediaType.PDF, MediaType.TEXT)
     install_hint = 'pip install "redact-suite[pdf]" and run a local Ollama server'
     priority = 60
+    uses_service = True
 
     def _model(self, options: RedactionOptions = None) -> str:
         if options and options.extra.get("ollama_model"):

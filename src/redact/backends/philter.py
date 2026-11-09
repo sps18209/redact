@@ -31,6 +31,7 @@ class PhilterBackend(Backend):
     supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED)
     install_hint = "run a Philter service and set PHILTER_ENDPOINT (https://philterd.ai/)"
     priority = 70
+    uses_service = True
 
     def _endpoint(self, options: RedactionOptions = None) -> str:
         if options and options.extra.get("philter_endpoint"):

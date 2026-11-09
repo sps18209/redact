@@ -4,8 +4,8 @@ Given a document and the user's options, the router decides which backend runs:
 
 * If the user names a backend (``options.backend != "auto"``), that backend is
   used — but only if it both supports the document's media type and is available.
-* Otherwise the router picks automatically: among backends that support the
-  media type and are currently available, the highest-priority one wins.
+* Otherwise the router picks the highest-priority available backend for the
+  media type that processes content without a service endpoint.
 """
 
 from __future__ import annotations
@@ -33,11 +33,12 @@ class Candidate:
 def candidates(
     document: Document, registry: BackendRegistry
 ) -> List[Candidate]:
-    """All backends that support the document's media type, best first."""
+    """Local automatic routing candidates for the media type, best first."""
     supporting = registry.for_media_type(document.media_type)
     cands = [
         Candidate(backend=b, available=b.is_available(), priority=b.priority)
         for b in supporting
+        if not b.uses_service
     ]
     # Available backends first, then by descending priority, then name for stability.
     cands.sort(key=lambda c: (not c.available, -c.priority, c.backend.name))
@@ -67,23 +68,26 @@ def select_backend(
             )
         if not backend.is_available():
             missing = ", ".join(backend.missing_dependencies())
+            hint = f". To enable it: {backend.install_hint}" if backend.install_hint else ""
             raise RoutingError(
-                f"backend '{backend.name}' is not available: missing {missing}"
+                f"backend '{backend.name}' is not available: missing {missing}{hint}"
             )
         return backend
 
     # Auto mode.
-    for cand in candidates(document, registry):
+    local = candidates(document, registry)
+    for cand in local:
         if cand.available:
             return cand.backend
 
-    supported = registry.for_media_type(document.media_type)
-    if not supported:
+    if not local:
         raise RoutingError(
-            f"no backend supports {document.media_type} files ({document.name})"
+            f"no local backend supports {document.media_type} files ({document.name})"
         )
-    names = ", ".join(b.name for b in supported)
+    hints = "; ".join(
+        f"{cand.backend.name}: {cand.backend.install_hint or 'install its dependencies'}"
+        for cand in local
+    )
     raise RoutingError(
-        f"no *available* backend for {document.media_type} ({document.name}); "
-        f"backends that could handle it: {names} — install one and retry"
+        f"no available local backend for {document.media_type} ({document.name}); {hints}"
     )

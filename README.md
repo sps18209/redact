@@ -1,7 +1,7 @@
 # redact-suite
 
 A unified **PII/PHI redaction suite**. Point it at *any* document — text, CSV/JSON,
-Word (.docx), Excel (.xlsx), PowerPoint (.pptx), email (.eml/.mbox), PDF, image, or video — and it routes each file to the best available redaction
+Word (.docx), Excel (.xlsx), PowerPoint (.pptx), email (.eml/.mbox), PDF, image, or video — and it routes each file to the best available local redaction
 tool, or one you pick by hand. A dependency-free rule engine ships built in, so
 the suite works out of the box and every heavy tool is opt-in.
 
@@ -18,11 +18,16 @@ the suite works out of the box and every heavy tool is opt-in.
 
 ```bash
 git clone https://github.com/sps18209/redact.git && cd redact
-pip install -e ".[all]"          # or pick extras below
-redact list                      # what's available, and how to get what isn't
+pip install -e .                 # add optional backends for your formats below
+redact guide                     # choose the input, processing route, and output folder
 ```
 
-Then the whole workflow is two commands:
+Enter a file or folder path when prompted, or pass it in directly with
+`redact guide ~/Documents/inbox`. The guide asks whether to include subfolders
+(off by default) and suggests a separate output folder next to the input.
+Press Enter for automatic local routing or select a route by number.
+
+For a non-interactive run and a follow-up scan:
 
 ```bash
 redact run ./inbox -o ./clean                 # 1. redact
@@ -39,11 +44,12 @@ nothing.
 
 | Exit | Means | Do |
 |---|---|---|
-| `0` | Safe | Ship it |
+| `0` | Completed | Review what the selected detector can miss |
 | `1` + `left content unredacted` | Worked, but knowingly left something (kept email attachment, scanned page, text in an image) | Read the warning — it names the fix |
 | `1` + `failed` | Couldn't process (missing backend, unreadable file, typo) | Read the message — it names what to install |
 
-Exit `0` always means the output is safe. That is enforced, not aspirational.
+Check the output before sharing. Pattern-based detection can miss names, case
+details, and text embedded in images.
 
 **Install only what your material needs:**
 
@@ -86,7 +92,15 @@ each document to the tool that fits.
 | **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — faces **and license plates**. ⚠️ Unmaintained since 2019 and pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it will not install on a current interpreter. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`) |
 
 Backends report their own availability, so `redact list` always tells you what
-can run right now and exactly what each missing one needs.
+can run locally and what each missing dependency needs. It labels Philter and
+RedactAI as opt-in. Use `redact list --probe-services` to check their endpoints
+without sending documents.
+
+Automatic routing skips Philter and RedactAI, including their health checks.
+An explicit `-b philter` or `-b redactai` sends unredacted text to the configured
+service, even with `--dry-run`. Philter is a separate PII/PHI filtering service.
+RedactAI sends prompts to Ollama. Optional local models may need to download
+weights during setup or first use.
 
 ## Install
 
@@ -105,9 +119,7 @@ right now, what it is missing, and the exact command to fix it:
 ```
 BACKEND            AVAIL  PRIO  MEDIA TYPES         DESCRIPTION
 builtin            yes    10    text,structured,…   Dependency-free regex/rule engine…
-redactai           no     60    pdf,text            RedactAI-style contextual PDF redaction…
-                   ├─ needs: pypdf, ollama server at http://localhost:11434 (unreachable)
-                   └─ pip install "redact-suite[pdf]" and run a local Ollama server
+redactai           opt-in 60    pdf,text            RedactAI-style contextual PDF redaction…
 ```
 
 ### Faces and license plates
@@ -327,10 +339,9 @@ redact run msg.eml --eml-attachments strip      # replace payload with a notice
 
 ### Exit codes
 
-`0` means the output is safe. The CLI exits **non-zero** when a run knowingly
-left content unredacted (today: kept binary attachments), separately from
-`success=False` failures — because `exit 0` from a redaction tool is a promise
-automation will act on.
+`0` means the run completed without a processing failure or a reported gap.
+The CLI exits **non-zero** when a run knowingly leaves content unredacted,
+such as a retained binary email attachment, or when processing fails.
 
 ### PDFs
 
@@ -397,7 +408,7 @@ Two limits worth stating plainly:
 
 | Flag | Meaning |
 |---|---|
-| `-b, --backend` | backend name, or `auto` (default) to let the suite choose |
+| `-b, --backend` | backend name, or `auto` (default) to choose a local backend by file type |
 | `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` — see [Redaction modes](#redaction-modes) |
 | `--hash-key` | key for `-m hash`; same key = same pseudonym across runs (omit for a random per-run key) |
 | `-e, --entities` | restrict detection to these labels (comma-separated or repeated) |
@@ -543,7 +554,7 @@ for res in suite.redact_paths(["./inbox"], opts):
    gets a `MediaType` from its extension, then magic-byte sniffing.
 2. **Choose** — if you named a backend it is used (validated for media type +
    availability); otherwise the router takes the highest-`priority` backend that
-   supports the media type *and* is available right now.
+   supports the media type, is available, and processes content without a service endpoint.
 3. **Run** — the backend translates the suite's neutral options into a call
    against the real tool and returns a `RedactionResult` (entities found, output
    path, status).

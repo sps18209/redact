@@ -35,6 +35,29 @@ def test_auto_picks_highest_priority_available():
     assert backend.name == "high"
 
 
+def test_service_backends_are_only_probed_if_explicitly_selected(monkeypatch):
+    from redact.backends import PhilterBackend, RedactAIBackend
+
+    probes = []
+
+    def record_probe(backend):
+        probes.append(backend.name)
+        return []
+
+    monkeypatch.setattr(PhilterBackend, "missing_dependencies", record_probe)
+    monkeypatch.setattr(RedactAIBackend, "missing_dependencies", record_probe)
+    local = _FakeBackend("local", (MediaType.TEXT,), 10, True)
+    reg = BackendRegistry([PhilterBackend(), RedactAIBackend(), local])
+
+    assert select_backend(_doc(), RedactionOptions(), reg) is local
+    with pytest.raises(RoutingError, match="no local backend"):
+        select_backend(_doc(MediaType.PDF), RedactionOptions(), reg)
+    assert probes == []
+
+    assert select_backend(_doc(), RedactionOptions(backend="philter"), reg).name == "philter"
+    assert probes == ["philter"]
+
+
 def test_auto_raises_when_none_available():
     reg = BackendRegistry([
         _FakeBackend("x", (MediaType.PDF,), 10, False),

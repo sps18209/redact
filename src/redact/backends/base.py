@@ -41,6 +41,9 @@ class Backend(abc.ABC):
     #: Purpose-built tools should outrank general fallbacks.
     priority: int = 0
 
+    #: This adapter sends unredacted content to a service endpoint.
+    uses_service: bool = False
+
     def supports(self, media_type: MediaType) -> bool:
         return media_type in self.supported_media_types
 
