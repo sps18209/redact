@@ -1,27 +1,18 @@
-"""Adapter for RedactAI-style contextual PDF redaction via local Ollama models.
-
-RedactAI is an MCP server that uses local Ollama models (Llama, Qwen, …) to
-*contextually* identify sensitive data in PDFs and black it out. This adapter
-reproduces the core pipeline in-process so it fits the suite's backend contract:
-
-    1. extract the PDF text layer (via pypdf, if installed),
-    2. ask a local Ollama model to identify sensitive spans,
-    3. apply redactions to the extracted text and, when pypdf can, black out the
-       corresponding spans in a new PDF.
-
-Availability requires a reachable Ollama server (``OLLAMA_HOST`` or
-localhost:11434) and pypdf for PDF parsing. Everything runs locally.
-See https://github.com/AtharvSabde/RedactAI
-"""
+"""Contextual redaction through Ollama. PDFs produce text extracts."""
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
+import ipaddress
 import json
 import os
-import urllib.error
+import tempfile
 import urllib.request
+from dataclasses import replace
+from pathlib import Path
 from typing import List
+from urllib.parse import urlsplit
 
 from ..document import Document, output_path
 from ..types import Entity, MediaType, RedactionOptions, RedactionResult
@@ -32,12 +23,24 @@ _DEFAULT_OLLAMA = "http://localhost:11434"
 _DEFAULT_MODEL = "llama3"
 _PROBE_TIMEOUT = 2.0
 _GEN_TIMEOUT = 120.0
+_CHUNK_SIZE = 2048
+_CHUNK_OVERLAP = 256
+
+_MODEL_FORMAT = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+}
 
 _PROMPT = (
     "You are a PII/PHI detection engine. From the text below, extract every span "
     "of sensitive information (names, addresses, phone numbers, emails, IDs, "
     "medical or financial details). Respond ONLY with a JSON array of objects "
-    '{"text": <exact substring>, "type": <LABEL>}. Text:\n\n'
+    '{"text": <exact substring>}. Use [] if there are no findings. Text:\n\n'
 )
 
 
@@ -52,29 +55,34 @@ def _module_present(name: str) -> bool:
         return False
 
 
+class OllamaError(ValueError):
+    """A safe diagnostic for a failed Ollama request or response."""
+
+
 class RedactAIBackend(Backend):
     name = "redactai"
-    description = ("RedactAI-style contextual detection via local Ollama models (Llama/Qwen). "
+    description = ("Contextual detection via a configured Ollama service. "
                    "Redacts text; for a PDF it extracts only — the PDF is not modified.")
     supported_media_types = (MediaType.PDF, MediaType.TEXT)
     install_hint = 'pip install "redact-suite[pdf]" and run a local Ollama server'
     priority = 60
+    uses_service = True
+    requires_service_consent = True
 
     def _model(self, options: RedactionOptions = None) -> str:
         if options and options.extra.get("ollama_model"):
             return options.extra["ollama_model"]
         return os.environ.get("OLLAMA_MODEL", _DEFAULT_MODEL)
 
+    def _pdf_available(self) -> bool:
+        return _module_present("pypdf")
+
     def missing_dependencies(self) -> List[str]:
-        missing: List[str] = []
-        if not _module_present("pypdf"):
-            missing.append("pypdf")
         try:
             with urllib.request.urlopen(_ollama_host() + "/api/tags", timeout=_PROBE_TIMEOUT):
-                pass
-        except (urllib.error.URLError, OSError):
-            missing.append(f"ollama server at {_ollama_host()} (unreachable)")
-        return missing
+                return []
+        except (OSError, ValueError):
+            return ["configured Ollama service is unreachable"]
 
     # -- text extraction -----------------------------------------------------
     def _extract_text(self, document: Document) -> str:
@@ -85,51 +93,90 @@ class RedactAIBackend(Backend):
         reader = PdfReader(str(document.path))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
 
-    # -- model call ----------------------------------------------------------
+    def _client(self, options: RedactionOptions):
+        host = _ollama_host()
+
+        def request(path, payload, timeout):
+            req = urllib.request.Request(
+                host + path, data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.load(response)
+
+        return self._model(options), request
+
     def _detect_with_model(self, text: str, options: RedactionOptions) -> List[Entity]:
-        payload = json.dumps(
-            {"model": self._model(options), "prompt": _PROMPT + text, "stream": False}
-        ).encode("utf-8")
-        req = urllib.request.Request(
-            _ollama_host() + "/api/generate",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=_GEN_TIMEOUT) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        raw = body.get("response", "")
-        return _entities_from_model_output(raw, text)
+        if not text.strip():
+            raise OllamaError("the document has no readable text layer")
+        model, request = self._client(options)
+        values = set()
+        for offset in range(0, len(text), _CHUNK_SIZE - _CHUNK_OVERLAP):
+            chunk = text[offset : offset + _CHUNK_SIZE]
+            try:
+                body = request("/api/generate", {
+                    "model": model, "prompt": _PROMPT + chunk, "stream": False,
+                    "truncate": False, "format": _MODEL_FORMAT,
+                }, _GEN_TIMEOUT)
+                if (
+                    not isinstance(body, dict) or body.get("done") is not True
+                    or body.get("done_reason") != "stop"
+                ):
+                    raise OllamaError("generation did not complete")
+                values.update(_model_values(body.get("response"), chunk))
+            except OllamaError as exc:
+                raise OllamaError(f"text section starting at character {offset + 1}: {exc}") from None
+            except (OSError, ValueError, http.client.HTTPException):
+                raise OllamaError(f"request failed for text section starting at character {offset + 1}") from None
+            if offset + _CHUNK_SIZE >= len(text):
+                break
+
+        if options.entities is not None and "SENSITIVE" not in options.entities:
+            return []
+        entities = []
+        for value in values:
+            start = text.find(value)
+            while start >= 0:
+                entities.append(Entity("SENSITIVE", 0.9, start, start + len(value), value))
+                start = text.find(value, start + 1)
+        return entities
 
     def redact(self, document: Document, options: RedactionOptions) -> RedactionResult:
-        missing = self.missing_dependencies()
-        if missing:
-            return RedactionResult(
-                source=document.path, backend=self.name,
-                media_type=document.media_type, success=False,
-                message=f"missing dependencies: {', '.join(missing)}",
-            )
-
         result = RedactionResult(
             source=document.path, backend=self.name, media_type=document.media_type,
         )
+        consent_error = self.service_consent_error(options)
+        if consent_error:
+            result.success = False
+            result.message = consent_error
+            return result
+        if document.media_type is MediaType.PDF and not self._pdf_available():
+            result.success = False
+            result.message = "PDF text extraction requires pypdf"
+            return result
+
+        out = output_path(document, options, suffix=".txt")
+        if not options.dry_run and (out.exists() or out.is_symlink()):
+            result.success = False
+            result.message = "output already exists from a prior run. Choose a fresh output folder."
+            return result
         try:
             text = self._extract_text(document)
-        except Exception as exc:  # pypdf / IO errors
+        except Exception:  # pypdf / IO errors
             result.success = False
-            result.message = f"could not extract text: {exc}"
+            result.message = "could not extract document text"
             return result
 
         try:
             model_entities = self._detect_with_model(text, options)
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        except OllamaError as exc:
             result.success = False
             result.message = f"ollama request failed: {exc}"
             return result
 
         # Fuse model output with deterministic regex detections for coverage.
         entities = _merge_entities(
-            model_entities, detect_entities(text, options.entities, options.threshold)
+            model_entities + detect_entities(text, options.entities, options.threshold), text
         )
         result.entities = entities
         redacted = apply_redactions(text, entities, options)
@@ -142,14 +189,30 @@ class RedactAIBackend(Backend):
         # Write the redacted text. For a .txt input this *is* the redacted
         # artifact. For a PDF it is only an extract: a true black-out needs a
         # PDF writer with span coordinates, which this adapter does not have.
-        out = output_path(document, options, suffix=".txt")
+        temp = None
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(redacted, encoding="utf-8")
-        except OSError as exc:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=out.parent, delete=False,
+            ) as handle:
+                temp = Path(handle.name)
+                handle.write(redacted)
+            # Publish a complete file and refuse concurrent overwrites.
+            os.link(temp, out)
+        except FileExistsError:
             result.success = False
-            result.message = f"could not write output: {exc}"
+            result.message = "output already exists from another run. Choose a fresh output folder."
             return result
+        except OSError:
+            result.success = False
+            result.message = "could not publish the redacted output"
+            return result
+        finally:
+            if temp is not None:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         result.output_path = out
 
         if document.media_type is MediaType.PDF:
@@ -169,45 +232,100 @@ class RedactAIBackend(Backend):
         return result
 
 
-def _entities_from_model_output(raw: str, text: str) -> List[Entity]:
-    """Parse the model's JSON array and locate each span within ``text``."""
-    entities: List[Entity] = []
-    start = raw.find("[")
-    end = raw.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        return entities
+class LocalOllamaBackend(RedactAIBackend):
+    name = "ollama-local"
+    description = "Local Ollama for text and PDF text extracts, with cloud disabled."
+    install_hint = "start an up-to-date local Ollama server with cloud disabled and an installed model"
+    requires_service_consent = False
+
+    def missing_dependencies(self) -> List[str]:
+        try:
+            _loopback_target()
+        except OllamaError as exc:
+            return [str(exc)]
+        return []
+
+    def _client(self, options: RedactionOptions):
+        host, port = _loopback_target()
+        configured_model = self._model(options)
+        model = configured_model.strip() if isinstance(configured_model, str) else ""
+        if not model or model.lower().removesuffix(":local").endswith((":cloud", "-cloud")):
+            raise OllamaError("choose an installed local model with OLLAMA_MODEL")
+        if not model.endswith(":local"):
+            model += ":local"
+
+        def request(path, payload, timeout):
+            connection = http.client.HTTPConnection(host, port, timeout=timeout)
+            try:
+                method = "GET" if payload is None else "POST"
+                data = None if payload is None else json.dumps(payload).encode("utf-8")
+                connection.request(method, path, body=data, headers={"Content-Type": "application/json"})
+                with connection.getresponse() as response:
+                    if response.status != 200:
+                        raise OllamaError(f"local Ollama returned HTTP {response.status} for {path}")
+                    body = json.load(response)
+                    if not isinstance(body, dict):
+                        raise OllamaError("local Ollama returned an invalid response")
+                    return body
+            finally:
+                connection.close()
+
+        try:
+            status = request("/api/status", None, _PROBE_TIMEOUT)
+            cloud = status.get("cloud")
+            if not isinstance(cloud, dict) or cloud.get("disabled") is not True:
+                raise OllamaError("disable Ollama cloud features and restart the server")
+            details = request("/api/show", {"model": model}, _PROBE_TIMEOUT)
+            if details.get("remote_host") or details.get("remote_model") or not details.get("model_info"):
+                raise OllamaError("the selected Ollama model could not be verified as local")
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            reason = str(exc) if isinstance(exc, OllamaError) else "local Ollama preflight failed"
+            raise OllamaError(f"{reason}. {self.install_hint}.") from None
+        return model, request
+
+
+def _loopback_target():
+    raw = _ollama_host()
     try:
-        items = json.loads(raw[start : end + 1])
+        url = urlsplit(raw if "://" in raw else "http://" + raw)
+        host = "127.0.0.1" if url.hostname == "localhost" else url.hostname
+        address = ipaddress.ip_address(host)
+        if (
+            url.scheme == "http" and address.is_loopback and url.username is None
+            and not url.path and not url.query and not url.fragment and url.port != 0
+        ):
+            return str(address), url.port or 11434
+    except ValueError:
+        pass
+    raise OllamaError("set OLLAMA_HOST to localhost or a numeric loopback address")
+
+
+def _model_values(raw, chunk: str) -> set:
+    """Validate every exact substring before accepting the section."""
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else None
     except json.JSONDecodeError:
-        return entities
-    search_from = 0
+        items = None
+    if not isinstance(items, list):
+        raise OllamaError("model did not return a findings array")
+    values = set()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        value = item.get("text")
-        if not value:
-            continue
-        idx = text.find(value, search_from)
-        if idx == -1:
-            idx = text.find(value)  # retry from the top
-        if idx == -1:
-            continue
-        entities.append(
-            Entity(
-                entity_type=str(item.get("type", "SENSITIVE")).upper(),
-                score=0.9,
-                start=idx,
-                end=idx + len(value),
-                text=value,
+        value = item.get("text") if isinstance(item, dict) else None
+        if not isinstance(value, str) or not value.strip() or value not in chunk:
+            raise OllamaError("model returned an invalid finding")
+        values.add(value)
+    return values
+
+
+def _merge_entities(entities: List[Entity], text: str) -> List[Entity]:
+    """Merge overlapping intervals so both findings are fully covered."""
+    merged: List[Entity] = []
+    for entity in sorted(entities, key=lambda item: (item.start, -item.end)):
+        if not merged or entity.start >= merged[-1].end:
+            merged.append(entity)
+        elif entity.end > merged[-1].end:
+            previous = merged[-1]
+            merged[-1] = replace(
+                previous, end=entity.end, text=text[previous.start : entity.end],
             )
-        )
-        search_from = idx + len(value)
-    return entities
-
-
-def _merge_entities(primary: List[Entity], secondary: List[Entity]) -> List[Entity]:
-    """Combine two entity lists, dropping positional overlaps."""
-    from .builtin import _dedupe_overlaps
-
-    positioned = [e for e in primary + secondary if e.start is not None]
-    return _dedupe_overlaps(positioned)
+    return merged

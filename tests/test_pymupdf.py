@@ -185,3 +185,19 @@ def test_the_router_prefers_it_for_pdf():
 
     assert PyMuPDFBackend.priority > RedactAIBackend.priority
     assert PyMuPDFBackend.priority > PdfRedactToolsBackend.priority
+
+
+def test_mixed_pdf_is_incomplete_after_text_redaction(scanned, tmp_path):
+    from redact.verify import verify_path
+
+    with pymupdf.open(scanned) as document:
+        document[0].insert_text((20, 30), "Contact demo@example.com")
+        path = tmp_path / "mixed.pdf"
+        document.save(path)
+    result = _run(path, tmp_path)
+    assert result.success and not result.fully_redacted
+    assert "unexamined image content" in result.unredacted[0]
+    assert "demo@example.com" not in _text(result.output_path)
+    report = verify_path(result.output_path, original=path)
+    assert report.status == "INCONCLUSIVE"
+    assert not report.clean

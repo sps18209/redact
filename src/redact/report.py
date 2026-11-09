@@ -148,8 +148,8 @@ def verify_report(
             "control_entities": report.control_entities,
             "note": report.note,
         })
-    leaking = [a for a in artifacts if not a["clean"]]
-    inconclusive = [a for a in artifacts if a["clean"] and a["inconclusive"]]
+    leaking = [a for a in artifacts if a["status"] == "LEAKING"]
+    inconclusive = [a for a in artifacts if a["status"] == "INCONCLUSIVE"]
     return {
         "schema": VERIFY_SCHEMA,
         "schema_version": SCHEMA_VERSION,

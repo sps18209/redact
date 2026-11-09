@@ -1,7 +1,7 @@
 # redact-suite
 
 A unified **PII/PHI redaction suite**. Point it at *any* document — text, CSV/JSON,
-Word (.docx), Excel (.xlsx), PowerPoint (.pptx), email (.eml/.mbox), PDF, image, or video — and it routes each file to the best available redaction
+Word (.docx), Excel (.xlsx), PowerPoint (.pptx), email (.eml/.mbox), PDF, image, or video — and it routes each file to the best available local redaction
 tool, or one you pick by hand. A dependency-free rule engine ships built in, so
 the suite works out of the box and every heavy tool is opt-in.
 
@@ -18,11 +18,16 @@ the suite works out of the box and every heavy tool is opt-in.
 
 ```bash
 git clone https://github.com/sps18209/redact.git && cd redact
-pip install -e ".[all]"          # or pick extras below
-redact list                      # what's available, and how to get what isn't
+pip install -e .                 # add optional backends for your formats below
+redact guide                     # choose the input, processing route, and output folder
 ```
 
-Then the whole workflow is two commands:
+Enter a file or folder path when prompted, or pass it in directly with
+`redact guide ~/Documents/inbox`. The guide asks whether to include subfolders
+(off by default) and suggests a separate output folder next to the input.
+Press Enter for automatic local routing or select a route by number.
+
+For a non-interactive run and a follow-up scan:
 
 ```bash
 redact run ./inbox -o ./clean                 # 1. redact
@@ -39,11 +44,12 @@ nothing.
 
 | Exit | Means | Do |
 |---|---|---|
-| `0` | Safe | Ship it |
+| `0` | Completed | Review what the selected detector can miss |
 | `1` + `left content unredacted` | Worked, but knowingly left something (kept email attachment, scanned page, text in an image) | Read the warning — it names the fix |
 | `1` + `failed` | Couldn't process (missing backend, unreadable file, typo) | Read the message — it names what to install |
 
-Exit `0` always means the output is safe. That is enforced, not aspirational.
+Check the output before sharing. Pattern-based detection can miss names, case
+details, and text embedded in images.
 
 **Install only what your material needs:**
 
@@ -78,7 +84,8 @@ each document to the tool that fits.
 | **presidio** | text, structured, docx, xlsx, pptx, email | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **pymupdf** | pdf | **True in-place PDF redaction** — removes text from the content stream (not a box drawn over it) and scrubs metadata. One pip install, no system dependencies. AGPL-3.0, opt-in. | `pip install "redact-suite[pymupdf]"` |
-| **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
+| **ollama-local** | pdf, text | Contextual detection with an installed local model. PDF input produces a redacted text extract. | Recent Ollama with cloud features disabled. PDF extraction also needs `pip install "redact-suite[pdf]"`. |
+| **redactai** | pdf, text | Contextual detection through a configured Ollama endpoint. PDF input produces a redacted text extract. | Running Ollama and `--allow-service`. |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. ⚠️ **Unmaintained Python 2** — needs `2to3` plus a bytes/str fix before it runs at all, and ImageMagick/exiftool/poppler. Use `pymupdf` instead unless you specifically need flattening. | a *patched* `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
 | **ocr** | image | **Redacts text that is pixels** — screenshots, scans, photos of documents. Reads the image and covers the regions carrying PII. One pip install, no system binary. | `pip install "redact-suite[ocr]"` |
@@ -86,7 +93,26 @@ each document to the tool that fits.
 | **anonymizer** | image, video | [understand.ai Anonymizer](https://github.com/understand-ai/anonymizer) — faces **and license plates**. ⚠️ Unmaintained since 2019 and pins `tensorflow-gpu==1.11.0` (Python ≤3.6), so it will not install on a current interpreter. | a git checkout (`ANONYMIZER_HOME`) or compatible CLI (`ANONYMIZER_BIN`) |
 
 Backends report their own availability, so `redact list` always tells you what
-can run right now and exactly what each missing one needs.
+can run locally and what each missing dependency needs. It labels Philter and
+both Ollama routes as opt-in. Use `redact list --probe-services` to check their endpoints
+without sending documents.
+
+Choose **Local Ollama** in `redact guide`, or use `redact run -b ollama-local`.
+Set `OLLAMA_MODEL` to an installed local model and start the Ollama server with
+`OLLAMA_NO_CLOUD=1`. The backend checks the server's cloud setting and resolves
+the model locally before sending document text. It reports a setup error if
+the installed Ollama version cannot confirm these checks. Choose a fresh output
+folder for an Ollama rerun to keep previous outputs distinct.
+
+Automatic routing skips the service backends. Philter and legacy RedactAI require
+`--allow-service` on the CLI or `RedactionOptions(allow_service=True)` in Python,
+including for dry runs. The configured service receives unredacted text.
+
+For `redact verify --original`, give the root of the original tree and verify the
+output root. Missing or ambiguous matches yield `INCONCLUSIVE`. PDF images also
+yield `INCONCLUSIVE` unless a detectable leak takes precedence. Human summaries
+show finding types and locations. Use `--json-include-values` with `--json` when
+you explicitly want matched values in the report.
 
 ## Install
 
@@ -105,9 +131,7 @@ right now, what it is missing, and the exact command to fix it:
 ```
 BACKEND            AVAIL  PRIO  MEDIA TYPES         DESCRIPTION
 builtin            yes    10    text,structured,…   Dependency-free regex/rule engine…
-redactai           no     60    pdf,text            RedactAI-style contextual PDF redaction…
-                   ├─ needs: pypdf, ollama server at http://localhost:11434 (unreachable)
-                   └─ pip install "redact-suite[pdf]" and run a local Ollama server
+redactai           opt-in 60    pdf,text            RedactAI-style contextual PDF redaction…
 ```
 
 ### Faces and license plates
@@ -327,10 +351,9 @@ redact run msg.eml --eml-attachments strip      # replace payload with a notice
 
 ### Exit codes
 
-`0` means the output is safe. The CLI exits **non-zero** when a run knowingly
-left content unredacted (today: kept binary attachments), separately from
-`success=False` failures — because `exit 0` from a redaction tool is a promise
-automation will act on.
+`0` means the run completed without a processing failure or a reported gap.
+The CLI exits **non-zero** when a run knowingly leaves content unredacted,
+such as a retained binary email attachment, or when processing fails.
 
 ### PDFs
 
@@ -343,22 +366,16 @@ redact run chart.pdf
 |---|---|
 | **`pymupdf`** *(default for PDF)* | **True redaction.** The text is removed from the page's content stream and the metadata scrubbed. The document stays a document — still selectable, searchable, accessible. |
 | `pdf-redact-tools` | Flattens every page to an image. More thorough (it destroys content you never detected) but the result is a picture of a document: no text, no search, no screen reader. **Unmaintained Python 2 — it will not run unpatched**, so treat it as a last resort. |
-| `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
+| `ollama-local`, `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
 
 Drawing black rectangles over text is not redaction — the characters stay in the
 content stream and any `pdftotext` recovers them. So the test for `pymupdf` is
 that the value is gone from the **raw bytes**, not that the page looks right.
 
-**Scanned PDFs.** A scan is an image of text: there is no text layer, so
-detection finds nothing and a naive tool reports a spotless run over a document
-full of PII. Pages carrying images but no text are reported and the run exits
-non-zero:
-
-```
-[ok] scanned.pdf via pymupdf (pdf): 0 entities -> scanned.redacted.pdf | WARNING:
-page(s) 1 carry images but no text layer — a scan reads as 'nothing found'.
-OCR it, or flatten with -b pdf-redact-tools
-```
+**PDF images.** The text redactor flags pages with unexamined images, including
+scanned pages and pages that also have selectable text. The run exits non-zero
+and verification is inconclusive if the output still contains images that were
+not examined. Review the image content before sharing the PDF.
 
 A detected entity whose position can't be resolved on the page (ligatures,
 hyphenation, text split across spans) is reported the same way rather than
@@ -397,7 +414,7 @@ Two limits worth stating plainly:
 
 | Flag | Meaning |
 |---|---|
-| `-b, --backend` | backend name, or `auto` (default) to let the suite choose |
+| `-b, --backend` | backend name, or `auto` (default) to choose a local backend by file type |
 | `-m, --mode` | `replace` (default), `mask`, `hash`, `redact`, `blur` — see [Redaction modes](#redaction-modes) |
 | `--hash-key` | key for `-m hash`; same key = same pseudonym across runs (omit for a random per-run key) |
 | `-e, --entities` | restrict detection to these labels (comma-separated or repeated) |
@@ -543,7 +560,7 @@ for res in suite.redact_paths(["./inbox"], opts):
    gets a `MediaType` from its extension, then magic-byte sniffing.
 2. **Choose** — if you named a backend it is used (validated for media type +
    availability); otherwise the router takes the highest-`priority` backend that
-   supports the media type *and* is available right now.
+   supports the media type, is available, and processes content without a service endpoint.
 3. **Run** — the backend translates the suite's neutral options into a call
    against the real tool and returns a `RedactionResult` (entities found, output
    path, status).

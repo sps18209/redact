@@ -31,6 +31,8 @@ class PhilterBackend(Backend):
     supported_media_types = (MediaType.TEXT, MediaType.STRUCTURED)
     install_hint = "run a Philter service and set PHILTER_ENDPOINT (https://philterd.ai/)"
     priority = 70
+    uses_service = True
+    requires_service_consent = True
 
     def _endpoint(self, options: RedactionOptions = None) -> str:
         if options and options.extra.get("philter_endpoint"):
@@ -52,6 +54,11 @@ class PhilterBackend(Backend):
             source=document.path, backend=self.name,
             media_type=document.media_type,
         )
+        consent_error = self.service_consent_error(options)
+        if consent_error:
+            result.success = False
+            result.message = consent_error
+            return result
         try:
             text = document.read_text()
         except OSError as exc:

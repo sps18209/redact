@@ -97,7 +97,7 @@ class RedactionSuite:
             (
                 b
                 for b in sorted(self.registry.all(), key=lambda b: -b.priority)
-                if b.supports(MediaType.IMAGE) and b.is_available()
+                if b.supports(MediaType.IMAGE) and not b.uses_service and b.is_available()
             ),
             None,
         )
@@ -120,15 +120,16 @@ class RedactionSuite:
         return redact_image
 
     # -- introspection -------------------------------------------------------
-    def describe_backends(self) -> List[dict]:
-        """Structured view of every backend for ``redact list`` / diagnostics."""
+    def describe_backends(self, *, probe_services: bool = False) -> List[dict]:
+        """List backend status. Availability is None for unprobed services."""
         rows = []
         for backend in self.registry.all():
+            skip_probe = backend.uses_service and not probe_services
             rows.append(
                 {
                     "name": backend.name,
-                    "available": backend.is_available(),
-                    "missing": backend.missing_dependencies(),
+                    "available": None if skip_probe else backend.is_available(),
+                    "missing": [] if skip_probe else backend.missing_dependencies(),
                     "media_types": [str(m) for m in backend.supported_media_types],
                     "priority": backend.priority,
                     "description": backend.description,

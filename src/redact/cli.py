@@ -4,6 +4,7 @@ Subcommands
 -----------
 ``redact list``               show every backend and whether it is available
 ``redact detect <inputs>``    show the detected media type for each input
+``redact guide [root]``       choose a file or folder and a local backend
 ``redact run <inputs>``       ingest and redact inputs (files, dirs, globs)
 ``redact search <q> <inputs>`` rank images/video by how well they match a phrase
 """
@@ -31,7 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     # list
-    sub.add_parser("list", help="list backends and their availability")
+    p_list = sub.add_parser("list", help="list backends and their availability")
+    p_list.add_argument(
+        "--probe-services", action="store_true",
+        help="contact configured HTTP backends to check availability",
+    )
+
+    p_guide = sub.add_parser("guide", help="choose a file or folder and redact locally")
+    p_guide.add_argument("root", nargs="?", help="file or folder to redact")
 
     # detect
     p_detect = sub.add_parser("detect", help="show detected media types for inputs")
@@ -48,7 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("inputs", nargs="+", help="files, directories, or globs")
     p_run.add_argument(
         "-b", "--backend", default="auto",
-        help="backend name, or 'auto' (default) to let the suite choose",
+        help="backend name, or 'auto' (default) to choose a local backend by file type",
+    )
+    p_run.add_argument(
+        "--allow-service", action="store_true",
+        help="allow Philter or legacy RedactAI to receive unredacted text, including on dry runs",
     )
     p_run.add_argument(
         "-m", "--mode", default="replace",
@@ -193,19 +205,77 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_list(suite: RedactionSuite) -> int:
-    rows = suite.describe_backends()
+def _cmd_list(suite: RedactionSuite, probe_services: bool) -> int:
+    rows = suite.describe_backends(probe_services=probe_services)
     print(f"{'BACKEND':<18} {'AVAIL':<6} {'PRIO':<5} {'MEDIA TYPES':<28} DESCRIPTION")
     print("-" * 100)
     for r in rows:
-        avail = "yes" if r["available"] else "no"
+        avail = {True: "yes", False: "no", None: "opt-in"}[r["available"]]
         media = ",".join(r["media_types"])
         print(f"{r['name']:<18} {avail:<6} {r['priority']:<5} {media:<28} {r['description']}")
-        if not r["available"] and r["missing"]:
+        if r["available"] is False and r["missing"]:
             print(f"{'':<18} ├─ needs: {', '.join(r['missing'])}")
             if r.get("install_hint"):
                 print(f"{'':<18} └─ {r['install_hint']}")
     return 0
+
+
+def _guide_path(raw: str) -> Path:
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    return Path(value).expanduser().resolve()
+
+
+def _cmd_guide(suite: RedactionSuite, parser: argparse.ArgumentParser, root: Optional[str]) -> int:
+    print("Local redaction. Choose one file or a folder of files.")
+    try:
+        if root is None:
+            root = input("Input file or folder path: ")
+        source = _guide_path(root) if root.strip() else None
+        if source is None or not (source.is_file() or source.is_dir()):
+            print("Choose an existing file or folder.", file=sys.stderr)
+            return 2
+
+        is_folder = source.is_dir()
+        recursive = False
+        if is_folder:
+            recursive = input("Include subfolders? [y/N]: ").strip().lower() in {"y", "yes"}
+        print("Choose a processing route:")
+        routes = {
+            "1": ("auto", "Automatic by file type"),
+            "2": ("builtin", "Text, Office, or email with pattern matching"),
+            "3": ("presidio", "Text, Office, or email with name and location detection"),
+            "4": ("pymupdf", "PDF with selectable text"),
+            "5": ("ocr", "Screenshots and other image files with text"),
+            "6": ("ollama-local", "Local Ollama for text and PDF text extracts"),
+        }
+        for number, (_, description) in routes.items():
+            print(f"  {number}. {description}")
+        choice = input("Route [1]: ").strip() or "1"
+        if choice not in routes:
+            print(f"Choose a route from 1 to {len(routes)}.", file=sys.stderr)
+            return 2
+
+        stem = source.name if is_folder else source.stem
+        default_output = source.parent / (f"{stem}-redacted" if stem else "redacted")
+        output = input(f"Output folder [{default_output}]: ").strip()
+        destination = _guide_path(output) if output else default_output
+        if destination.exists() and not destination.is_dir():
+            print(f"Output must be a folder: {destination}", file=sys.stderr)
+            return 2
+    except (EOFError, KeyboardInterrupt):
+        print("\nRedaction cancelled.", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Could not use that path: {exc}", file=sys.stderr)
+        return 2
+
+    run_args = ["run", str(source), "--backend", routes[choice][0], "--out", str(destination)]
+    if not recursive:
+        run_args.append("--no-recursive")
+    print("Review the output before sharing. Detection coverage depends on the route.")
+    return _cmd_run(suite, parser.parse_args(run_args))
 
 
 def _report_inputs(inputs: List[str], recursive: bool) -> None:
@@ -301,6 +371,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         extra=_yolo_extra(args),
         output_dir=Path(args.out) if args.out else None,
         dry_run=args.dry_run,
+        allow_service=args.allow_service,
     )
 
     _report_inputs(args.inputs, not args.no_recursive)
@@ -362,7 +433,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Re-scan finished artifacts. Independent of whatever produced them."""
-    from .verify import verify_path
+    from .verify import pair_with_originals, verify_path
 
     _report_inputs(args.inputs, not args.no_recursive)
     skipped: List = []
@@ -386,15 +457,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     entities = _parse_entities(args.entities)
     leaking = inconclusive = 0
     collected = []
-    for doc in documents:
-        origin = None
-        if source_dir is not None:
-            candidate = source_dir / doc.path.name.replace(".redacted", "", 1)
-            origin = candidate if candidate.exists() else None
+    for doc, origin in pair_with_originals(documents, source_dir):
         result = verify_path(
-            doc.path, entities=entities, threshold=args.threshold, original=origin
+            doc.path, entities=entities, threshold=args.threshold, original=origin,
+            require_original=source_dir is not None,
         )
-        if not result.clean:
+        if result.findings:
             leaking += 1
         elif result.inconclusive:
             inconclusive += 1
@@ -417,8 +485,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         )
     elif inconclusive:
         print(
-            f"{inconclusive} artifact(s) could not be meaningfully checked (the "
-            "positive control found nothing in the original). Treat as unverified.",
+            f"{inconclusive} artifact(s) had incomplete verification. "
+            "Treat as unverified.",
             file=sys.stderr,
         )
     code = 1 if (leaking or inconclusive) else 0
@@ -480,7 +548,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     suite = RedactionSuite()
 
     if args.command == "list":
-        return _cmd_list(suite)
+        return _cmd_list(suite, args.probe_services)
+    if args.command == "guide":
+        return _cmd_guide(suite, parser, args.root)
     if args.command == "detect":
         return _cmd_detect(
             args.inputs, not args.no_recursive, args.include_unknown

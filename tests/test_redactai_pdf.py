@@ -21,7 +21,7 @@ SECRET = "123-45-6789"
 def backend():
     b = RedactAIBackend()
     # Stand in for pypdf + a running Ollama so the real redact() path runs.
-    b.missing_dependencies = lambda: []
+    b._pdf_available = lambda: True
     b._extract_text = lambda d: f"Employee SSN {SECRET}"
     b._detect_with_model = lambda t, o: [
         Entity(entity_type="US_SSN", score=0.9, start=13, end=24, text=SECRET)
@@ -32,7 +32,7 @@ def backend():
 def _run(backend, path, media_type, tmp_path):
     return backend.redact(
         Document(path=path, media_type=media_type),
-        RedactionOptions(output_dir=tmp_path / "out"),
+        RedactionOptions(allow_service=True, output_dir=tmp_path / "out"),
     )
 
 
@@ -84,7 +84,7 @@ def test_a_plain_text_input_is_a_genuinely_clean_run(backend, tmp_path):
 def test_dry_run_writes_nothing_and_claims_nothing(backend, pdf, tmp_path):
     res = backend.redact(
         Document(path=pdf, media_type=MediaType.PDF),
-        RedactionOptions(dry_run=True, output_dir=tmp_path / "out"),
+        RedactionOptions(allow_service=True, dry_run=True, output_dir=tmp_path / "out"),
     )
     assert res.output_path is None
     assert not (tmp_path / "out").exists()

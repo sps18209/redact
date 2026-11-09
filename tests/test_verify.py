@@ -113,7 +113,7 @@ def test_a_control_that_finds_nothing_makes_the_result_inconclusive(tmp_path):
     redacted.write_text("nothing sensitive at all")
 
     report = verify_path(redacted, original=original)
-    assert report.clean
+    assert not report.clean
     assert report.inconclusive
     assert report.status == "INCONCLUSIVE"
     assert "proves nothing" in report.note
@@ -279,3 +279,35 @@ def test_ooxml_structural_ids_are_not_pii():
     for noise in ("2147483759", "1805331330", "9C124767"):
         assert noise not in out
     assert "555-867-5309" in out  # typed text is never stripped
+
+
+def test_verify_matches_nested_originals_and_marks_missing_ones(tmp_path, capsys):
+    output = tmp_path / "output"
+    original = tmp_path / "original"
+    for directory in (output, original):
+        (directory / "nested").mkdir(parents=True)
+    (original / "nested" / "report.txt").write_text("demo@example.com")
+    (original / "report.txt").write_text("no detectable findings here")
+    (output / "nested" / "report.redacted.txt").write_text("<EMAIL_ADDRESS>")
+    assert main(["verify", str(output), "--original", str(original)]) == 0
+    assert "[clean]" in capsys.readouterr().out
+    (original / "nested" / "report.txt").unlink()
+    assert main(["verify", str(output), "--original", str(original)]) == 1
+    assert "[INCONCLUSIVE]" in capsys.readouterr().out
+
+
+def test_verify_keeps_raw_values_out_of_human_output(tmp_path, capsys):
+    source = tmp_path / "leak.txt"
+    source.write_text("demo@example.com")
+    assert main(["verify", str(source), "--original", str(tmp_path / "original")]) == 2
+    capsys.readouterr()
+    (tmp_path / "original").mkdir()
+    report = tmp_path / "verify.json"
+    assert main([
+        "verify", str(source), "--original", str(tmp_path / "original"),
+        "--json", str(report), "--json-include-values",
+    ]) == 1
+    captured = capsys.readouterr()
+    assert "[LEAKING]" in captured.out
+    assert "demo@example.com" not in captured.out + captured.err
+    assert "demo@example.com" in report.read_text()

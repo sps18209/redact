@@ -1,3 +1,5 @@
+import io
+
 from redact.cli import main
 
 
@@ -7,6 +9,54 @@ def test_cli_list(capsys):
     assert rc == 0
     assert "builtin" in out
     assert "presidio" in out
+
+
+def test_cli_list_only_probes_http_services_on_request(monkeypatch, capsys):
+    from redact.backends import PhilterBackend, RedactAIBackend
+
+    probes = []
+
+    def record_probe(backend):
+        probes.append(backend.name)
+        return []
+
+    monkeypatch.setattr(PhilterBackend, "missing_dependencies", record_probe)
+    monkeypatch.setattr(RedactAIBackend, "missing_dependencies", record_probe)
+
+    assert main(["list"]) == 0
+    assert probes == []
+    assert "opt-in" in capsys.readouterr().out
+
+    assert main(["list", "--probe-services"]) == 0
+    assert set(probes) == {"philter", "redactai"}
+
+
+def test_guide_accepts_quoted_folder_and_defaults_to_top_level(tmp_path, monkeypatch):
+    root = tmp_path / "client files"
+    nested = root / "archive"
+    nested.mkdir(parents=True)
+    source = root / "notes.txt"
+    source.write_text("Email sample@example.com")
+    (nested / "old.txt").write_text("Email old@example.com")
+    monkeypatch.setattr("sys.stdin", io.StringIO(f'"{root}"\n\n2\n\n'))
+
+    assert main(["guide"]) == 0
+    output = tmp_path / "client files-redacted"
+    assert "sample@example.com" not in (output / "notes.redacted.txt").read_text()
+    assert "sample@example.com" in source.read_text()
+    assert not (output / "archive").exists()
+
+
+def test_guide_can_include_subfolders_and_use_a_custom_output(tmp_path, monkeypatch):
+    root = tmp_path / "in"
+    nested = root / "archive"
+    nested.mkdir(parents=True)
+    (nested / "notes.txt").write_text("Email sample@example.com")
+    output = tmp_path / "review copies"
+    monkeypatch.setattr("sys.stdin", io.StringIO(f"yes\n2\n{output}\n"))
+
+    assert main(["guide", str(root)]) == 0
+    assert (output / "archive" / "notes.redacted.txt").exists()
 
 
 def test_cli_detect(tmp_path, capsys):

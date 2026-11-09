@@ -41,6 +41,18 @@ class Backend(abc.ABC):
     #: Purpose-built tools should outrank general fallbacks.
     priority: int = 0
 
+    #: This adapter sends unredacted content to a service endpoint.
+    uses_service: bool = False
+    requires_service_consent: bool = False
+
+    def service_consent_error(self, options: RedactionOptions) -> str:
+        if self.requires_service_consent and options.allow_service is not True:
+            return (
+                f"{self.name} sends unredacted content to a configured service. "
+                "Use --allow-service or RedactionOptions(allow_service=True) to proceed."
+            )
+        return ""
+
     def supports(self, media_type: MediaType) -> bool:
         return media_type in self.supported_media_types
 
