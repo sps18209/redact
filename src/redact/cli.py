@@ -59,6 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="backend name, or 'auto' (default) to choose a local backend by file type",
     )
     p_run.add_argument(
+        "--allow-service", action="store_true",
+        help="allow Philter or legacy RedactAI to receive unredacted text, including on dry runs",
+    )
+    p_run.add_argument(
         "-m", "--mode", default="replace",
         choices=[m.value for m in RedactionMode],
         help="how to transform detected entities (default: replace)",
@@ -244,12 +248,13 @@ def _cmd_guide(suite: RedactionSuite, parser: argparse.ArgumentParser, root: Opt
             "3": ("presidio", "Text, Office, or email with name and location detection"),
             "4": ("pymupdf", "PDF with selectable text"),
             "5": ("ocr", "Screenshots and other image files with text"),
+            "6": ("ollama-local", "Local Ollama for text and PDF text extracts"),
         }
         for number, (_, description) in routes.items():
             print(f"  {number}. {description}")
         choice = input("Route [1]: ").strip() or "1"
         if choice not in routes:
-            print("Choose a route from 1 to 5.", file=sys.stderr)
+            print(f"Choose a route from 1 to {len(routes)}.", file=sys.stderr)
             return 2
 
         stem = source.name if is_folder else source.stem
@@ -366,6 +371,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
         extra=_yolo_extra(args),
         output_dir=Path(args.out) if args.out else None,
         dry_run=args.dry_run,
+        allow_service=args.allow_service,
     )
 
     _report_inputs(args.inputs, not args.no_recursive)
@@ -427,7 +433,7 @@ def _cmd_run(suite: RedactionSuite, args: argparse.Namespace) -> int:
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     """Re-scan finished artifacts. Independent of whatever produced them."""
-    from .verify import verify_path
+    from .verify import pair_with_originals, verify_path
 
     _report_inputs(args.inputs, not args.no_recursive)
     skipped: List = []
@@ -451,15 +457,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     entities = _parse_entities(args.entities)
     leaking = inconclusive = 0
     collected = []
-    for doc in documents:
-        origin = None
-        if source_dir is not None:
-            candidate = source_dir / doc.path.name.replace(".redacted", "", 1)
-            origin = candidate if candidate.exists() else None
+    for doc, origin in pair_with_originals(documents, source_dir):
         result = verify_path(
-            doc.path, entities=entities, threshold=args.threshold, original=origin
+            doc.path, entities=entities, threshold=args.threshold, original=origin,
+            require_original=source_dir is not None,
         )
-        if not result.clean:
+        if result.findings:
             leaking += 1
         elif result.inconclusive:
             inconclusive += 1
@@ -482,8 +485,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         )
     elif inconclusive:
         print(
-            f"{inconclusive} artifact(s) could not be meaningfully checked (the "
-            "positive control found nothing in the original). Treat as unverified.",
+            f"{inconclusive} artifact(s) had incomplete verification. "
+            "Treat as unverified.",
             file=sys.stderr,
         )
     code = 1 if (leaking or inconclusive) else 0

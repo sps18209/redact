@@ -106,6 +106,7 @@ class RedactionOptions:
     #: What to do with email attachments that cannot be redacted: keep | strip.
     eml_attachments: str = "keep"
     extra: dict = field(default_factory=dict)  # backend-specific escape hatch
+    allow_service: bool = False  # consent to send source text to a configured service
 
     def hash_material(self) -> bytes:
         """The HMAC key for HASH mode: the explicit key, else this run's."""

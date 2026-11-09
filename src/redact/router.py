@@ -66,6 +66,9 @@ def select_backend(
                 f"backend '{backend.name}' does not support {document.media_type} "
                 f"files (needed for {document.name})"
             )
+        consent_error = backend.service_consent_error(options)
+        if consent_error:
+            raise RoutingError(consent_error)
         if not backend.is_available():
             missing = ", ".join(backend.missing_dependencies())
             hint = f". To enable it: {backend.install_hint}" if backend.install_hint else ""

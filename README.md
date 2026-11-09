@@ -84,7 +84,8 @@ each document to the tool that fits.
 | **presidio** | text, structured, docx, xlsx, pptx, email | [Microsoft Presidio](https://microsoft.github.io/presidio/) — NLP + rules; detects names/locations too. | `pip install "redact-suite[presidio]"` + a spaCy model |
 | **philter** | text, structured | [Philter](https://philterd.ai/) self-hosted PII/PHI service (healthcare/legal/finance). | a running Philter service (`PHILTER_ENDPOINT`) |
 | **pymupdf** | pdf | **True in-place PDF redaction** — removes text from the content stream (not a box drawn over it) and scrubs metadata. One pip install, no system dependencies. AGPL-3.0, opt-in. | `pip install "redact-suite[pymupdf]"` |
-| **redactai** | pdf, text | [RedactAI](https://github.com/AtharvSabde/RedactAI)-style contextual detection via local Ollama models. Redacts `.txt` outright; for a **PDF it writes a redacted text extract and leaves the PDF itself untouched**, reporting it as unredacted (non-zero exit). | `pip install "redact-suite[pdf]"` + a running Ollama |
+| **ollama-local** | pdf, text | Contextual detection with an installed local model. PDF input produces a redacted text extract. | Recent Ollama with cloud features disabled. PDF extraction also needs `pip install "redact-suite[pdf]"`. |
+| **redactai** | pdf, text | Contextual detection through a configured Ollama endpoint. PDF input produces a redacted text extract. | Running Ollama and `--allow-service`. |
 | **pdf-redact-tools** | pdf | Flattens PDFs to images, stripping the text layer & hidden metadata. ⚠️ **Unmaintained Python 2** — needs `2to3` plus a bytes/str fix before it runs at all, and ImageMagick/exiftool/poppler. Use `pymupdf` instead unless you specifically need flattening. | a *patched* `pdf-redact-tools` on `PATH` |
 | **yolo** | image, video | [Ultralytics YOLO](https://docs.ultralytics.com/) — **open-vocabulary** masking from text prompts, so **license plates** (and anything else you can name) are covered. | `pip install "redact-suite[yolo]"` |
 | **ocr** | image | **Redacts text that is pixels** — screenshots, scans, photos of documents. Reads the image and covers the regions carrying PII. One pip install, no system binary. | `pip install "redact-suite[ocr]"` |
@@ -93,14 +94,25 @@ each document to the tool that fits.
 
 Backends report their own availability, so `redact list` always tells you what
 can run locally and what each missing dependency needs. It labels Philter and
-RedactAI as opt-in. Use `redact list --probe-services` to check their endpoints
+both Ollama routes as opt-in. Use `redact list --probe-services` to check their endpoints
 without sending documents.
 
-Automatic routing skips Philter and RedactAI, including their health checks.
-An explicit `-b philter` or `-b redactai` sends unredacted text to the configured
-service, even with `--dry-run`. Philter is a separate PII/PHI filtering service.
-RedactAI sends prompts to Ollama. Optional local models may need to download
-weights during setup or first use.
+Choose **Local Ollama** in `redact guide`, or use `redact run -b ollama-local`.
+Set `OLLAMA_MODEL` to an installed local model and start the Ollama server with
+`OLLAMA_NO_CLOUD=1`. The backend checks the server's cloud setting and resolves
+the model locally before sending document text. It reports a setup error if
+the installed Ollama version cannot confirm these checks. Choose a fresh output
+folder for an Ollama rerun to keep previous outputs distinct.
+
+Automatic routing skips the service backends. Philter and legacy RedactAI require
+`--allow-service` on the CLI or `RedactionOptions(allow_service=True)` in Python,
+including for dry runs. The configured service receives unredacted text.
+
+For `redact verify --original`, give the root of the original tree and verify the
+output root. Missing or ambiguous matches yield `INCONCLUSIVE`. PDF images also
+yield `INCONCLUSIVE` unless a detectable leak takes precedence. Human summaries
+show finding types and locations. Use `--json-include-values` with `--json` when
+you explicitly want matched values in the report.
 
 ## Install
 
@@ -354,22 +366,16 @@ redact run chart.pdf
 |---|---|
 | **`pymupdf`** *(default for PDF)* | **True redaction.** The text is removed from the page's content stream and the metadata scrubbed. The document stays a document — still selectable, searchable, accessible. |
 | `pdf-redact-tools` | Flattens every page to an image. More thorough (it destroys content you never detected) but the result is a picture of a document: no text, no search, no screen reader. **Unmaintained Python 2 — it will not run unpatched**, so treat it as a last resort. |
-| `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
+| `ollama-local`, `redactai` | Detection over the text layer plus a redacted `.txt` *extract*. The PDF is **not** modified, so the run reports content left unredacted and exits non-zero. |
 
 Drawing black rectangles over text is not redaction — the characters stay in the
 content stream and any `pdftotext` recovers them. So the test for `pymupdf` is
 that the value is gone from the **raw bytes**, not that the page looks right.
 
-**Scanned PDFs.** A scan is an image of text: there is no text layer, so
-detection finds nothing and a naive tool reports a spotless run over a document
-full of PII. Pages carrying images but no text are reported and the run exits
-non-zero:
-
-```
-[ok] scanned.pdf via pymupdf (pdf): 0 entities -> scanned.redacted.pdf | WARNING:
-page(s) 1 carry images but no text layer — a scan reads as 'nothing found'.
-OCR it, or flatten with -b pdf-redact-tools
-```
+**PDF images.** The text redactor flags pages with unexamined images, including
+scanned pages and pages that also have selectable text. The run exits non-zero
+and verification is inconclusive if the output still contains images that were
+not examined. Review the image content before sharing the PDF.
 
 A detected entity whose position can't be resolved on the page (ligatures,
 hyphenation, text split across spans) is reported the same way rather than

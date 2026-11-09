@@ -9,7 +9,7 @@ from .pdf_redact_tools import PdfRedactToolsBackend
 from .philter import PhilterBackend
 from .presidio import PresidioBackend
 from .pymupdf import PyMuPDFBackend
-from .redactai import RedactAIBackend
+from .redactai import LocalOllamaBackend, RedactAIBackend
 from .yolo import YoloBackend
 
 #: The backend classes registered by default, in no particular order (the
@@ -20,6 +20,7 @@ DEFAULT_BACKENDS = [
     DefaceBackend,
     PhilterBackend,
     RedactAIBackend,
+    LocalOllamaBackend,
     OcrBackend,
     PdfRedactToolsBackend,
     PyMuPDFBackend,
@@ -34,6 +35,7 @@ __all__ = [
     "DefaceBackend",
     "PhilterBackend",
     "RedactAIBackend",
+    "LocalOllamaBackend",
     "OcrBackend",
     "PdfRedactToolsBackend",
     "PyMuPDFBackend",

@@ -54,7 +54,12 @@ def test_service_backends_are_only_probed_if_explicitly_selected(monkeypatch):
         select_backend(_doc(MediaType.PDF), RedactionOptions(), reg)
     assert probes == []
 
-    assert select_backend(_doc(), RedactionOptions(backend="philter"), reg).name == "philter"
+    with pytest.raises(RoutingError, match="--allow-service"):
+        select_backend(_doc(), RedactionOptions(backend="philter"), reg)
+    assert probes == []
+
+    options = RedactionOptions(backend="philter", allow_service=True)
+    assert select_backend(_doc(), options, reg).name == "philter"
     assert probes == ["philter"]
 
 

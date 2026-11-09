@@ -128,7 +128,7 @@ class Finding:
     layer: str
 
     def __str__(self) -> str:
-        return f"{self.entity.entity_type} in {self.layer}: {self.entity.text!r}"
+        return f"{self.entity.entity_type} in {self.layer}"
 
 
 @dataclass
@@ -142,21 +142,22 @@ class VerificationReport:
     #: Set when ``--original`` was given: entities found in the SOURCE file.
     control_entities: Optional[int] = None
     note: str = ""
+    coverage_incomplete: bool = False
 
     @property
     def clean(self) -> bool:
-        return not self.findings
+        return not self.findings and not self.inconclusive
 
     @property
     def inconclusive(self) -> bool:
-        """The control found nothing, so a clean result proves nothing."""
-        return self.control_entities == 0
+        """Verification could not inspect all required content or establish a control."""
+        return self.coverage_incomplete or self.control_entities == 0
 
     @property
     def status(self) -> str:
-        if self.inconclusive:
-            return "INCONCLUSIVE"
-        return "clean" if self.clean else "LEAKING"
+        if self.findings:
+            return "LEAKING"
+        return "INCONCLUSIVE" if self.inconclusive else "clean"
 
     def summary(self) -> str:
         head = f"[{self.status}] {self.path.name} ({self.media_type}) — {self.layers_scanned} layer(s)"
@@ -180,8 +181,8 @@ def extract_layers(path: Path, media_type: MediaType) -> Dict[str, str]:
     layers: Dict[str, str] = {}
     try:
         raw = path.read_bytes()
-    except OSError as exc:
-        return {"<unreadable>": f"{exc}"}
+    except OSError:
+        return {"<unreadable>": ""}
 
     # Specific layers are collected first and "raw" is added last, because a
     # finding is attributed to the first layer it appears in. An uncompressed
@@ -300,14 +301,15 @@ def _pdf_text(path: Path) -> Dict[str, str]:
             # compressed stream will hide text from it. Say so, don't imply
             # the file was checked properly.
             return {"pdf:<no engine>": ""}
-    out = []
-    doc = pymupdf.open(str(path))
-    try:
-        for page in doc:
-            out.append(page.get_text())
-    finally:
-        doc.close()
-    return {"pdf:text": "\n".join(out)}
+    text = []
+    layers = {}
+    with pymupdf.open(str(path)) as doc:
+        for number, page in enumerate(doc, start=1):
+            text.append(page.get_text())
+            if page.get_image_info():
+                layers[f"pdf:<unexamined image> page {number}"] = ""
+    layers["pdf:text"] = "\n".join(text)
+    return layers
 
 
 # -- verification -------------------------------------------------------------
@@ -323,29 +325,35 @@ def verify_path(
     entities: Optional[Sequence[str]] = None,
     threshold: float = 0.35,
     original: Optional[Path] = None,
+    *,
+    require_original: bool = False,
 ) -> VerificationReport:
     """Re-scan ``path``; with ``original``, run the positive control first."""
     media_type = detect_media_type(path)
     report = VerificationReport(path=path, media_type=media_type)
 
-    if original is not None and original.exists():
+    notes = []
+    if original is not None and original.is_file():
         control = _scan(original, detect_media_type(original), entities, threshold)
         report.control_entities = len(control)
         if not control:
-            report.note = (
-                f"positive control found no PII in {original.name} — this engine "
-                "cannot see into that file, so a clean result here proves nothing"
-            )
+            notes.append("positive control found no PII in the original, so a clean result proves nothing")
+    elif original is not None or require_original:
+        report.coverage_incomplete = True
+        notes.append("original file is missing or ambiguous")
 
     layers = extract_layers(path, media_type)
     report.layers_scanned = len(layers)
+    if "<unreadable>" in layers:
+        report.coverage_incomplete = True
+        notes.append("could not read the output file")
     if any(k.startswith("pdf:<no engine>") for k in layers):
         # Same reasoning as the image case below: a PDF's text lives in
         # compressed streams, so searching raw bytes finds nothing whether or
         # not the file is clean. Reporting "clean" from that is the base64
         # failure again, so force INCONCLUSIVE rather than merely noting it.
-        report.control_entities = 0
-        report.note = (
+        report.coverage_incomplete = True
+        notes.append(
             "no usable PDF engine — only raw bytes were searched, which a "
             'compressed stream hides. pip install "redact-suite[pymupdf]"'
         )
@@ -353,11 +361,17 @@ def verify_path(
         # An image's text is pixels. Searching the compressed bytes finds
         # nothing whether or not an SSN is legible on screen, so "clean" here
         # would be the same empty reassurance as a grep over base64.
-        report.control_entities = 0  # force INCONCLUSIVE
-        report.note = (
+        report.coverage_incomplete = True
+        notes.append(
             "text inside the image was NOT examined (no OCR engine) — a "
             f'screenshot or scan can carry PII as pixels. {ocr_hint()}'
         )
+
+    image_pages = [layer.rsplit(" ", 1)[-1] for layer in layers if layer.startswith("pdf:<unexamined image>")]
+    if image_pages:
+        report.coverage_incomplete = True
+        notes.append(f"PDF images were not examined on page(s) {', '.join(image_pages)}")
+    report.note = ". ".join(notes)
 
     seen = set()
     for layer, text in layers.items():
@@ -393,18 +407,27 @@ def _scan(
 def pair_with_originals(
     outputs: Sequence[Document], source_dir: Optional[Path]
 ) -> List[Tuple[Document, Optional[Path]]]:
-    """Match each redacted artifact to its source for the positive control.
-
-    Outputs are named ``<stem>.redacted<suffix>``, so the source name is
-    recoverable; anything that does not match is verified without a control.
-    """
-    pairs: List[Tuple[Document, Optional[Path]]] = []
+    """Pair mirrored outputs by relative path, without searching by basename."""
+    pairs = []
     for doc in outputs:
         origin = None
         if source_dir is not None:
-            name = doc.path.name.replace(".redacted", "", 1)
-            candidate = source_dir / name
-            if candidate.exists():
+            parent = doc.path.relative_to(doc.root).parent if doc.root is not None else Path()
+            stem = doc.path.stem
+            if stem.endswith(".redacted"):
+                stem = stem[:-len(".redacted")]
+            candidate = source_dir / parent / (stem + doc.path.suffix)
+            # A text extract can share a destination name with a redacted .txt.
+            # Require an unambiguous exact match instead of guessing its source.
+            if candidate.is_file() and not (
+                doc.path.suffix.lower() == ".txt"
+                and any(
+                    sibling != candidate and sibling.is_file()
+                    and sibling.stem == stem
+                    and detect_media_type(sibling) in (MediaType.PDF, MediaType.TEXT)
+                    for sibling in candidate.parent.iterdir()
+                )
+            ):
                 origin = candidate
         pairs.append((doc, origin))
     return pairs

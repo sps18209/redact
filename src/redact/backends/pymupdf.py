@@ -25,9 +25,8 @@ clean run over a document that still carries PII:
 * **A page with no text layer.** A scanned document is an image of text: the
   extraction is empty, so detection finds nothing and the run would otherwise
   look spotless. Those pages are reported too — "no text layer" means "this
-  tool could not read it", never "there is nothing here". Flatten such a file
-  by OCRing it first, or with ``-b pdf-redact-tools`` (unmaintained
-  Python 2, so it needs patching before it runs at all).
+  tool could not read it". Pages with selectable text and embedded images
+  also require review of their image content.
 
 Licence note: PyMuPDF is AGPL-3.0 (or commercial), like ``ultralytics``. It is
 an opt-in extra, never a hard dependency of this MIT-licensed suite.
@@ -99,13 +98,13 @@ class PyMuPDFBackend(Backend):
             return result
 
         try:
-            entities, unlocatable, imageonly = self._plan(doc, options)
+            entities, unlocatable, image_pages = self._plan(doc, options)
             result.entities = entities
 
             if options.dry_run:
                 doc.close()
-                result.message = _summary(entities, unlocatable, imageonly, applied=False)
-                result.unredacted = _unredacted(unlocatable, imageonly)
+                result.message = _summary(entities, unlocatable, image_pages, applied=False)
+                result.unredacted = _unredacted(unlocatable, image_pages)
                 return result
 
             out = output_path(document, options)
@@ -123,8 +122,8 @@ class PyMuPDFBackend(Backend):
                 doc.close()
 
             result.output_path = out
-            result.unredacted = _unredacted(unlocatable, imageonly)
-            result.message = _summary(entities, unlocatable, imageonly, applied=True)
+            result.unredacted = _unredacted(unlocatable, image_pages)
+            result.message = _summary(entities, unlocatable, image_pages, applied=True)
             return result
         except Exception as exc:  # defensive: a batch must survive one bad file
             try:
@@ -140,15 +139,13 @@ class PyMuPDFBackend(Backend):
         """Mark every locatable entity for removal; report what could not be."""
         found: List[Entity] = []
         unlocatable: List[str] = []
-        imageonly: List[int] = []
+        image_pages: List[int] = []
 
         for number, page in enumerate(doc, start=1):
             text = page.get_text()
+            if page.get_image_info():
+                image_pages.append(number)
             if not text.strip():
-                # No text layer. Either a genuinely blank page or — the case
-                # that matters — a scan, where every word is pixels.
-                if page.get_images(full=True):
-                    imageonly.append(number)
                 continue
 
             for entity in detect_entities(text, options.entities, options.threshold):
@@ -171,22 +168,22 @@ class PyMuPDFBackend(Backend):
             # Removes the marked content from this page's content stream.
             page.apply_redactions()
 
-        return found, unlocatable, imageonly
+        return found, unlocatable, image_pages
 
 
-def _unredacted(unlocatable: List[str], imageonly: List[int]) -> List[str]:
+def _unredacted(unlocatable: List[str], image_pages: List[int]) -> List[str]:
     """Content this run knowingly did not remove (drives the non-zero exit)."""
     out = list(unlocatable)
-    if imageonly:
-        pages = ", ".join(str(p) for p in imageonly)
-        out.append(f"page(s) {pages} have no text layer (scanned?)")
+    if image_pages:
+        pages = ", ".join(str(p) for p in image_pages)
+        out.append(f"page(s) {pages} have unexamined image content")
     return out
 
 
 def _summary(
     entities: List[Entity],
     unlocatable: List[str],
-    imageonly: List[int],
+    image_pages: List[int],
     applied: bool,
 ) -> str:
     head = (
@@ -199,11 +196,10 @@ def _summary(
             f"WARNING: {len(unlocatable)} detected item(s) could not be located on the "
             f"page and are UNCHANGED ({'; '.join(unlocatable)})"
         )
-    if imageonly:
-        pages = ", ".join(str(p) for p in imageonly)
+    if image_pages:
+        pages = ", ".join(str(p) for p in image_pages)
         notes.append(
-            f"WARNING: page(s) {pages} carry images but no text layer — a scan reads as "
-            "'nothing found'. OCR the file first, or flatten it with -b "
-            "pdf-redact-tools (unmaintained Python 2 — see its install hint)"
+            f"WARNING: image content on page(s) {pages} was not checked, "
+            "including scans with no text layer"
         )
     return " | ".join([head] + notes)
